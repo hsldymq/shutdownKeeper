@@ -78,8 +78,10 @@ type ShutdownKeeper struct {
 	tokenGroup       *sync.WaitGroup
 	tokenReleaseChan chan struct{}
 
-	status       int32
-	shutdownChan chan struct{}
+	status              int32
+	shutdownProcessChan chan struct{}
+	shutdownNotifyChan  chan struct{}
+	l                   *sync.Mutex
 }
 
 func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
@@ -97,8 +99,10 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		tokenGroup:       &sync.WaitGroup{},
 		tokenReleaseChan: make(chan struct{}, 1),
 
-		status:       keeperInit,
-		shutdownChan: make(chan struct{}, 1),
+		status:              keeperInit,
+		shutdownProcessChan: make(chan struct{}, 1),
+
+		l: &sync.Mutex{},
 	}
 }
 
@@ -117,7 +121,7 @@ func (k *ShutdownKeeper) Wait() {
 		go k.listenSignals()
 		go k.listenContext()
 	}
-	<-k.shutdownChan
+	<-k.shutdownProcessChan
 
 	if !k.alwaysHold && k.HoldTokenNum() == 0 {
 		return
@@ -126,6 +130,27 @@ func (k *ShutdownKeeper) Wait() {
 	case <-time.After(k.maxHoldTime):
 	case <-k.tokenReleaseChan:
 	}
+}
+
+// ListenShutdown returns a channel to notify callers that the shutdown process is triggered.
+// This is sometimes useful when you have multiple subroutines, and any of them wants to know if shutdown process is triggered by others.
+func (k *ShutdownKeeper) ListenShutdown() <-chan struct{} {
+	k.l.Lock()
+	defer k.l.Unlock()
+	if k.shutdownNotifyChan == nil {
+		k.shutdownNotifyChan = make(chan struct{}, 1)
+		go func() {
+			for {
+				if len(k.shutdownNotifyChan) == 0 {
+					k.shutdownNotifyChan <- struct{}{}
+					continue
+				}
+				time.Sleep(time.Second)
+			}
+		}()
+	}
+
+	return k.shutdownNotifyChan
 }
 
 // AllocHoldToken allocates a hold token.
@@ -188,7 +213,7 @@ func (k *ShutdownKeeper) tryRun() bool {
 
 func (k *ShutdownKeeper) startShutdown() bool {
 	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
-		k.shutdownChan <- struct{}{}
+		k.shutdownProcessChan <- struct{}{}
 		return true
 	}
 	return false
