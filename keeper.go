@@ -44,18 +44,26 @@ type KeeperOpts struct {
 	// any signal in this slice will trigger the shutdown process.
 	Signals []os.Signal
 
-	// Context allows ShutdownKeeper shutdown from listening to the context.Done() event.
+	// Context listens to the context.Done() event, the event will trigger the shutdown process.
 	Context context.Context
 
 	// OnSignalShutdown that will be called when ShutdownKeeper receives any signal provided by Signals.
 	// this allows you to perform graceful shutdown by stopping the process before the program is actually shutdown.
+	// If both signal and context.Done() are triggered,
+	//	only one of OnSignalShutdown and OnContextDone will be called depending on which event is triggered first.
 	OnSignalShutdown func(os.Signal)
 
 	// OnContextDone will be called when ShutdownKeeper receives a context.Done() event.
+	// If both signal and context.Done() are triggered,
+	//	only one of OnSignalShutdown and OnContextDone will be called depending on which event is triggered first.
 	OnContextDone func()
 
-	AlwaysHold  bool
+	// MaxHoldTime is the maximum time that ShutdownKeeper will wait for all HoldTokens to be released.
+	// if the time is exceeded, ShutdownKeeper.Wait() will force return.
 	MaxHoldTime time.Duration
+
+	// if AlwaysHold is true, ShutdownKeeper will always hold the shutdown process for MaxHoldTime even if there is no HoldToken being allocated.
+	AlwaysHold bool
 }
 
 type ShutdownKeeper struct {
