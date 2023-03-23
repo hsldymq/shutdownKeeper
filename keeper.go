@@ -100,7 +100,7 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		tokenReleaseChan: make(chan struct{}, 1),
 
 		status:              keeperInit,
-		shutdownProcessChan: make(chan struct{}, 1),
+		shutdownProcessChan: make(chan struct{}, 2),
 
 		l: &sync.Mutex{},
 	}
@@ -140,6 +140,7 @@ func (k *ShutdownKeeper) ListenShutdown() <-chan struct{} {
 	if k.shutdownNotifyChan == nil {
 		k.shutdownNotifyChan = make(chan struct{}, 1)
 		go func() {
+			<-k.shutdownProcessChan
 			for {
 				if len(k.shutdownNotifyChan) == 0 {
 					k.shutdownNotifyChan <- struct{}{}
@@ -213,6 +214,7 @@ func (k *ShutdownKeeper) tryRun() bool {
 
 func (k *ShutdownKeeper) startShutdown() bool {
 	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
+		k.shutdownProcessChan <- struct{}{}
 		k.shutdownProcessChan <- struct{}{}
 		return true
 	}

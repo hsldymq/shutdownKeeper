@@ -73,19 +73,25 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 		MaxHoldTime: 20 * time.Second,
 	})
 
-	var actual int32
+	var actualVal int32
+	var actualWaitSec int
 	go func(token HoldToken) {
+		startTime := time.Now()
 		<-keeper.ListenShutdown()
+		actualWaitSec = int(time.Now().Sub(startTime).Seconds())
 		token.Release()
-		atomic.StoreInt32(&actual, 1)
+		atomic.StoreInt32(&actualVal, 1)
 	}(keeper.AllocHoldToken())
 
-	cancel()
-	startTime := time.Now()
+	go func() {
+		time.Sleep(2 * time.Second)
+		cancel()
+	}()
 	keeper.Wait()
 
-	assert.Less(t, int(time.Now().Sub(startTime).Seconds()), 2)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
+	assert.GreaterOrEqual(t, actualWaitSec, 2)
+	assert.LessOrEqual(t, actualWaitSec, 3)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&actualVal))
 }
 
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
