@@ -4,17 +4,18 @@ import (
 	"context"
 	"github.com/stretchr/testify/assert"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 )
 
 func TestShutdownKeeper_SignalShutdown(t *testing.T) {
-	actual := 0
+	var actual int32
 	keeper := NewShutdownKeeper(KeeperOpts{
 		Signals: []os.Signal{syscall.SIGINT},
 		OnSignalShutdown: func(_ os.Signal) {
-			actual = 1
+			atomic.StoreInt32(&actual, 1)
 		},
 	})
 	go func() {
@@ -23,16 +24,16 @@ func TestShutdownKeeper_SignalShutdown(t *testing.T) {
 	}()
 
 	keeper.Wait()
-	assert.Equal(t, 1, actual)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 
 func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
-	actual := 0
+	var actual int32
 	ctx, cancel := context.WithCancel(context.Background())
 	keeper := NewShutdownKeeper(KeeperOpts{
 		Context: ctx,
 		OnContextDone: func() {
-			actual = 1
+			atomic.StoreInt32(&actual, 1)
 		},
 	})
 	go func() {
@@ -41,7 +42,7 @@ func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
 	}()
 
 	keeper.Wait()
-	assert.Equal(t, 1, actual)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 
 func TestShutdownKeeper_HoldToken(t *testing.T) {

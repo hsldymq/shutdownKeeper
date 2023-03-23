@@ -80,12 +80,13 @@ type ShutdownKeeper struct {
 	tokenGroup       *sync.WaitGroup
 	tokenReleaseChan chan struct{}
 
-	status       keeperStatus
-	statusLocker *sync.Mutex
+	status       *atomic.Int32
 	shutdownChan chan struct{}
 }
 
 func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
+	status := &atomic.Int32{}
+	status.Store(int32(keeperInit))
 	return &ShutdownKeeper{
 		signals:       opts.Signals,
 		signalHandler: opts.OnSignalShutdown,
@@ -100,8 +101,7 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		tokenGroup:       &sync.WaitGroup{},
 		tokenReleaseChan: make(chan struct{}, 1),
 
-		status:       keeperInit,
-		statusLocker: &sync.Mutex{},
+		status:       status,
 		shutdownChan: make(chan struct{}, 1),
 	}
 }
@@ -141,7 +141,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 		releasedFunc: func() {
 			k.tokenGroup.Done()
 			k.holdTokenNum.Add(-1)
-			if k.status == keeperShutdown && k.holdTokenNum.Load() == 0 && len(k.tokenReleaseChan) == 0 {
+			if k.status.Load() == int32(keeperShutdown) && k.holdTokenNum.Load() == 0 && len(k.tokenReleaseChan) == 0 {
 				k.tokenReleaseChan <- struct{}{}
 			}
 		},
@@ -187,22 +187,13 @@ func (k *ShutdownKeeper) listenContext() {
 }
 
 func (k *ShutdownKeeper) tryRun() bool {
-	k.statusLocker.Lock()
-	defer k.statusLocker.Unlock()
-	if k.status != keeperInit {
-		return false
-	}
-	k.status = keeperRunning
-	return true
+	return k.status.CompareAndSwap(int32(keeperInit), int32(keeperRunning))
 }
 
 func (k *ShutdownKeeper) startShutdown() bool {
-	k.statusLocker.Lock()
-	defer k.statusLocker.Unlock()
-	if k.status != keeperRunning {
-		return false
+	if k.status.CompareAndSwap(int32(keeperRunning), int32(keeperShutdown)) {
+		k.shutdownChan <- struct{}{}
+		return true
 	}
-	k.status = keeperShutdown
-	k.shutdownChan <- struct{}{}
-	return true
+	return false
 }
