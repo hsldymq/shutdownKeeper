@@ -73,7 +73,7 @@ type ShutdownKeeper struct {
 	ctxHandler func()
 
 	maxHoldTime      time.Duration
-	holdTokenNum     *atomic.Int32
+	holdTokenNum     int32
 	alwaysHold       bool
 	tokenGroup       *sync.WaitGroup
 	tokenReleaseChan chan struct{}
@@ -92,7 +92,7 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		ctxHandler: opts.OnContextDone,
 
 		maxHoldTime:      opts.MaxHoldTime,
-		holdTokenNum:     &atomic.Int32{},
+		holdTokenNum:     0,
 		alwaysHold:       opts.AlwaysHold,
 		tokenGroup:       &sync.WaitGroup{},
 		tokenReleaseChan: make(chan struct{}, 1),
@@ -130,14 +130,14 @@ func (k *ShutdownKeeper) Wait() {
 
 // AllocHoldToken allocates a hold token.
 func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
-	k.holdTokenNum.Add(1)
+	atomic.AddInt32(&k.holdTokenNum, 1)
 	k.tokenGroup.Add(1)
 	return &holdTokenImpl{
 		releaseLock: &sync.Mutex{},
 		releasedFunc: func() {
 			k.tokenGroup.Done()
-			k.holdTokenNum.Add(-1)
-			if atomic.LoadInt32(&k.status) == keeperShutdown && k.holdTokenNum.Load() == 0 && len(k.tokenReleaseChan) == 0 {
+			atomic.AddInt32(&k.holdTokenNum, -1)
+			if atomic.LoadInt32(&k.status) == keeperShutdown && k.HoldTokenNum() == 0 && len(k.tokenReleaseChan) == 0 {
 				k.tokenReleaseChan <- struct{}{}
 			}
 		},
@@ -146,7 +146,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 
 // HoldTokenNum returns the number of hold tokens that are not released yet.
 func (k *ShutdownKeeper) HoldTokenNum() int {
-	return int(k.holdTokenNum.Load())
+	return int(atomic.LoadInt32(&k.holdTokenNum))
 }
 
 func (k *ShutdownKeeper) listenSignals() {
