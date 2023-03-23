@@ -80,12 +80,12 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 		atomic.StoreInt32(&actual, 1)
 	}(keeper.AllocHoldToken())
 
-	startTime := time.Now()
 	cancel()
+	startTime := time.Now()
 	keeper.Wait()
 
-	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 	assert.Equal(t, 0, int(time.Now().Sub(startTime).Seconds()))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
