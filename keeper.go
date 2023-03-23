@@ -30,10 +30,8 @@ func (kt *holdTokenImpl) Release() {
 	}
 }
 
-type keeperStatus int
-
 const (
-	keeperInit keeperStatus = iota
+	keeperInit int32 = iota
 	keeperRunning
 	keeperShutdown
 )
@@ -80,13 +78,11 @@ type ShutdownKeeper struct {
 	tokenGroup       *sync.WaitGroup
 	tokenReleaseChan chan struct{}
 
-	status       *atomic.Int32
+	status       int32
 	shutdownChan chan struct{}
 }
 
 func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
-	status := &atomic.Int32{}
-	status.Store(int32(keeperInit))
 	return &ShutdownKeeper{
 		signals:       opts.Signals,
 		signalHandler: opts.OnSignalShutdown,
@@ -101,7 +97,7 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		tokenGroup:       &sync.WaitGroup{},
 		tokenReleaseChan: make(chan struct{}, 1),
 
-		status:       status,
+		status:       keeperInit,
 		shutdownChan: make(chan struct{}, 1),
 	}
 }
@@ -141,7 +137,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 		releasedFunc: func() {
 			k.tokenGroup.Done()
 			k.holdTokenNum.Add(-1)
-			if k.status.Load() == int32(keeperShutdown) && k.holdTokenNum.Load() == 0 && len(k.tokenReleaseChan) == 0 {
+			if atomic.LoadInt32(&k.status) == keeperShutdown && k.holdTokenNum.Load() == 0 && len(k.tokenReleaseChan) == 0 {
 				k.tokenReleaseChan <- struct{}{}
 			}
 		},
@@ -187,11 +183,11 @@ func (k *ShutdownKeeper) listenContext() {
 }
 
 func (k *ShutdownKeeper) tryRun() bool {
-	return k.status.CompareAndSwap(int32(keeperInit), int32(keeperRunning))
+	return atomic.CompareAndSwapInt32(&k.status, keeperInit, keeperRunning)
 }
 
 func (k *ShutdownKeeper) startShutdown() bool {
-	if k.status.CompareAndSwap(int32(keeperRunning), int32(keeperShutdown)) {
+	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
 		k.shutdownChan <- struct{}{}
 		return true
 	}
