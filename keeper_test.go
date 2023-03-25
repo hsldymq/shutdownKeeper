@@ -74,11 +74,9 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	})
 
 	var actualVal int32
-	var actualWaitSec int
+	startTime := time.Now()
 	go func(token HoldToken) {
-		startTime := time.Now()
 		<-keeper.ListenShutdown()
-		actualWaitSec = int(time.Now().Sub(startTime).Seconds())
 		atomic.StoreInt32(&actualVal, 1)
 		token.Release()
 	}(keeper.AllocHoldToken())
@@ -89,8 +87,7 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	}()
 	keeper.Wait()
 
-	assert.GreaterOrEqual(t, actualWaitSec, 2)
-	assert.LessOrEqual(t, actualWaitSec, 3)
+	assert.Equal(t, 2, int(time.Now().Sub(startTime).Seconds()))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&actualVal))
 }
 
