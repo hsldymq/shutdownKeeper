@@ -78,10 +78,10 @@ type ShutdownKeeper struct {
 	tokenGroup       *sync.WaitGroup
 	tokenReleaseChan chan struct{}
 
-	status              int32
-	shutdownProcessChan chan struct{}
-	shutdownNotifyChan  chan struct{}
-	l                   *sync.Mutex
+	status             int32
+	shutdownEventChan  chan struct{}
+	shutdownNotifyChan chan struct{}
+	l                  *sync.Mutex
 }
 
 func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
@@ -97,10 +97,10 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		holdTokenNum:     0,
 		alwaysHold:       opts.AlwaysHold,
 		tokenGroup:       &sync.WaitGroup{},
-		tokenReleaseChan: make(chan struct{}, 1),
+		tokenReleaseChan: make(chan struct{}),
 
-		status:              keeperInit,
-		shutdownProcessChan: make(chan struct{}, 2),
+		status:            keeperInit,
+		shutdownEventChan: make(chan struct{}),
 
 		l: &sync.Mutex{},
 	}
@@ -121,7 +121,7 @@ func (k *ShutdownKeeper) Wait() {
 		go k.listenSignals()
 		go k.listenContext()
 	}
-	<-k.shutdownProcessChan
+	<-k.shutdownEventChan
 
 	if !k.alwaysHold && k.HoldTokenNum() == 0 {
 		return
@@ -138,16 +138,11 @@ func (k *ShutdownKeeper) ListenShutdown() <-chan struct{} {
 	k.l.Lock()
 	defer k.l.Unlock()
 	if k.shutdownNotifyChan == nil {
-		k.shutdownNotifyChan = make(chan struct{}, 1)
+		k.shutdownNotifyChan = make(chan struct{})
 		go func() {
-			<-k.shutdownProcessChan
-			for {
-				if len(k.shutdownNotifyChan) == 0 {
-					k.shutdownNotifyChan <- struct{}{}
-					continue
-				}
-				time.Sleep(time.Second)
-			}
+			<-k.shutdownEventChan
+			defer func() { _ = recover() }()
+			close(k.shutdownNotifyChan)
 		}()
 	}
 
@@ -164,7 +159,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 			k.tokenGroup.Done()
 			atomic.AddInt32(&k.holdTokenNum, -1)
 			if atomic.LoadInt32(&k.status) == keeperShutdown && k.HoldTokenNum() == 0 && len(k.tokenReleaseChan) == 0 {
-				k.tokenReleaseChan <- struct{}{}
+				close(k.tokenReleaseChan)
 			}
 		},
 	}
@@ -214,8 +209,7 @@ func (k *ShutdownKeeper) tryRun() bool {
 
 func (k *ShutdownKeeper) startShutdown() bool {
 	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
-		k.shutdownProcessChan <- struct{}{}
-		k.shutdownProcessChan <- struct{}{}
+		close(k.shutdownEventChan)
 		return true
 	}
 	return false
