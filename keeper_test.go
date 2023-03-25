@@ -24,7 +24,6 @@ func TestShutdownKeeper_SignalShutdown(t *testing.T) {
 	}()
 
 	keeper.Wait()
-	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 
@@ -43,7 +42,6 @@ func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
 	}()
 
 	keeper.Wait()
-	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 

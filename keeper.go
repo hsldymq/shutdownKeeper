@@ -116,7 +116,7 @@ func (k *ShutdownKeeper) Wait() {
 	}
 
 	if len(k.signals) == 0 && k.ctx == nil {
-		k.startShutdown()
+		k.startShutdown(nil)
 	} else {
 		go k.listenSignals()
 		go k.listenContext()
@@ -176,15 +176,14 @@ func (k *ShutdownKeeper) listenSignals() {
 	}
 
 	signal.Notify(k.signalChan, k.signals...)
-	select {
-	case s := <-k.signalChan:
-		if !k.startShutdown() {
-			return
+	s := <-k.signalChan
+	k.startShutdown(func(s os.Signal) func() {
+		return func() {
+			if k.signalHandler != nil {
+				k.signalHandler(s)
+			}
 		}
-		if k.signalHandler != nil {
-			k.signalHandler(s)
-		}
-	}
+	}(s))
 }
 
 func (k *ShutdownKeeper) listenContext() {
@@ -192,23 +191,19 @@ func (k *ShutdownKeeper) listenContext() {
 		return
 	}
 
-	select {
-	case <-k.ctx.Done():
-		if !k.startShutdown() {
-			return
-		}
-		if k.ctxHandler != nil {
-			k.ctxHandler()
-		}
-	}
+	<-k.ctx.Done()
+	k.startShutdown(k.ctxHandler)
 }
 
 func (k *ShutdownKeeper) tryRun() bool {
 	return atomic.CompareAndSwapInt32(&k.status, keeperInit, keeperRunning)
 }
 
-func (k *ShutdownKeeper) startShutdown() bool {
+func (k *ShutdownKeeper) startShutdown(eventCallbackFunc func()) bool {
 	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
+		if eventCallbackFunc != nil {
+			eventCallbackFunc()
+		}
 		close(k.shutdownEventChan)
 		return true
 	}
