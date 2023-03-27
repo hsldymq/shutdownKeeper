@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
-// HoldToken is a token that can be used to hold the shutdown process to let the subroutines finish their work.
-// once the all HoldTokens are released, the shutdown process will be continued.
+// HoldToken is allocated to subroutines to listen the shutdown event, and let the subroutines finish their work.
+// each subroutine holding a HoldToken should call Release() method when it finishes its work.
+// once all the HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
+	ListenShutdown() <-chan struct{}
 	Release()
 }
 
@@ -19,6 +21,8 @@ type holdTokenImpl struct {
 	released     bool
 	releasedFunc func()
 	releaseLock  *sync.Mutex
+
+	shutdownNotifyChan <-chan struct{}
 }
 
 func (kt *holdTokenImpl) Release() {
@@ -28,6 +32,10 @@ func (kt *holdTokenImpl) Release() {
 		kt.released = true
 		go kt.releasedFunc()
 	}
+}
+
+func (kt *holdTokenImpl) ListenShutdown() <-chan struct{} {
+	return kt.shutdownNotifyChan
 }
 
 const (
@@ -81,10 +89,9 @@ type ShutdownKeeper struct {
 	status             int32
 	shutdownEventChan  chan struct{}
 	shutdownNotifyChan chan struct{}
-	l                  *sync.Mutex
 }
 
-func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
+func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 	return &ShutdownKeeper{
 		signals:       opts.Signals,
 		signalHandler: opts.OnSignalShutdown,
@@ -99,10 +106,9 @@ func NewShutdownKeeper(opts KeeperOpts) *ShutdownKeeper {
 		tokenGroup:       &sync.WaitGroup{},
 		tokenReleaseChan: make(chan struct{}),
 
-		status:            keeperInit,
-		shutdownEventChan: make(chan struct{}),
-
-		l: &sync.Mutex{},
+		status:             keeperInit,
+		shutdownEventChan:  make(chan struct{}),
+		shutdownNotifyChan: make(chan struct{}),
 	}
 }
 
@@ -115,6 +121,12 @@ func (k *ShutdownKeeper) Wait() {
 		return
 	}
 
+	go func() {
+		<-k.shutdownEventChan
+		defer func() { _ = recover() }()
+		close(k.shutdownNotifyChan)
+	}()
+
 	if len(k.signals) == 0 && k.ctx == nil {
 		k.startShutdown(nil)
 	} else {
@@ -123,30 +135,13 @@ func (k *ShutdownKeeper) Wait() {
 	}
 	<-k.shutdownEventChan
 
-	if !k.alwaysHold && k.HoldTokenNum() == 0 {
+	if !k.alwaysHold && k.getHoldTokenNum() == 0 {
 		return
 	}
 	select {
 	case <-time.After(k.maxHoldTime):
 	case <-k.tokenReleaseChan:
 	}
-}
-
-// ListenShutdown returns a channel to notify callers that the shutdown process is triggered.
-// This is sometimes useful when you have multiple subroutines, and any of them wants to know if shutdown process is triggered by others.
-func (k *ShutdownKeeper) ListenShutdown() <-chan struct{} {
-	k.l.Lock()
-	defer k.l.Unlock()
-	if k.shutdownNotifyChan == nil {
-		k.shutdownNotifyChan = make(chan struct{})
-		go func() {
-			<-k.shutdownEventChan
-			defer func() { _ = recover() }()
-			close(k.shutdownNotifyChan)
-		}()
-	}
-
-	return k.shutdownNotifyChan
 }
 
 // AllocHoldToken allocates a hold token.
@@ -158,15 +153,16 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 		releasedFunc: func() {
 			k.tokenGroup.Done()
 			atomic.AddInt32(&k.holdTokenNum, -1)
-			if atomic.LoadInt32(&k.status) == keeperShutdown && k.HoldTokenNum() == 0 && len(k.tokenReleaseChan) == 0 {
+			if atomic.LoadInt32(&k.status) == keeperShutdown && k.getHoldTokenNum() == 0 && len(k.tokenReleaseChan) == 0 {
 				close(k.tokenReleaseChan)
 			}
 		},
+		shutdownNotifyChan: k.shutdownNotifyChan,
 	}
 }
 
-// HoldTokenNum returns the number of hold tokens that are not released yet.
-func (k *ShutdownKeeper) HoldTokenNum() int {
+// getHoldTokenNum returns the number of hold tokens that are not released yet.
+func (k *ShutdownKeeper) getHoldTokenNum() int {
 	return int(atomic.LoadInt32(&k.holdTokenNum))
 }
 

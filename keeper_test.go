@@ -12,7 +12,7 @@ import (
 
 func TestShutdownKeeper_SignalShutdown(t *testing.T) {
 	var actual int32
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		Signals: []os.Signal{syscall.SIGINT},
 		OnSignalShutdown: func(_ os.Signal) {
 			atomic.StoreInt32(&actual, 1)
@@ -30,7 +30,7 @@ func TestShutdownKeeper_SignalShutdown(t *testing.T) {
 func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
 	var actual int32
 	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		Context: ctx,
 		OnContextDone: func() {
 			atomic.StoreInt32(&actual, 1)
@@ -46,7 +46,7 @@ func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
 }
 
 func TestShutdownKeeper_HoldToken(t *testing.T) {
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		MaxHoldTime: 5 * time.Second,
 	})
 
@@ -68,7 +68,7 @@ func TestShutdownKeeper_HoldToken(t *testing.T) {
 
 func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		Context:     ctx,
 		MaxHoldTime: 20 * time.Second,
 	})
@@ -76,7 +76,7 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	var actualVal int32
 	startTime := time.Now()
 	go func(token HoldToken) {
-		<-keeper.ListenShutdown()
+		<-token.ListenShutdown()
 		atomic.StoreInt32(&actualVal, 1)
 		token.Release()
 	}(keeper.AllocHoldToken())
@@ -93,7 +93,7 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		Signals:    []os.Signal{syscall.SIGINT},
 		Context:    ctx,
 		AlwaysHold: true,
@@ -112,7 +112,7 @@ func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
 }
 
 func TestShutdownKeeper_AlwaysHold(t *testing.T) {
-	keeper := NewShutdownKeeper(KeeperOpts{
+	keeper := NewKeeper(KeeperOpts{
 		AlwaysHold:  true,
 		MaxHoldTime: 2 * time.Second,
 	})
