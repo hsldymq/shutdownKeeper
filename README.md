@@ -64,5 +64,56 @@ func main() {
 	// When service receives a SIGINT or SIGTERM signal, it will keep blocking until every HoldToken is released or the MaxHoldTime is reached.
 	keeper.Wait()
 }
+```
 
+## Shutdown by Context.Done event
+Assume that we have a long-running task, and we accept http request shutdown the task.
+
+Shutdown keeper can also listen to the Context.Done event, and perform graceful shutdown.
+
+```go
+package main
+
+import (
+	"context"
+	"github.com/hsldymq/shutdownKeeper"
+	"net/http"
+	"time"
+)
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
+		Context:     ctx,
+		MaxHoldTime: 20 * time.Second,
+	})
+
+	go func(token shutdownKeeper.HoldToken) {
+		// RunTask is used to run a task that may block this goroutine until the context is canceled.
+		RunTask(ctx)
+		token.Release()
+	}(keeper.AllocHoldToken())
+
+	go func() {
+		server := &http.Server{
+			Addr: ":8011",
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "POST" && r.URL.Path == "/shutdown" {
+					cancel()
+					return
+				}
+				// ...
+			}),
+		}
+		go func(token shutdownKeeper.HoldToken) {
+			// ListenShutdown will block until the context is canceled.
+			<-token.ListenShutdown()
+			server.Shutdown(context.Background())
+			token.Release()
+		}(keeper.AllocHoldToken())
+		_ = server.ListenAndServe()
+	}()
+
+	keeper.Wait()
+}
 ```
