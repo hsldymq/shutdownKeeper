@@ -114,6 +114,7 @@ func main() {
 		_ = server.ListenAndServe()
 	}()
 
+	// This will block until every HoldToken is released or the MaxHoldTime is reached.
 	keeper.Wait()
 }
 ```
