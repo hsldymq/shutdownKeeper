@@ -152,8 +152,8 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 		releaseLock: &sync.Mutex{},
 		releasedFunc: func() {
 			k.tokenGroup.Done()
-			atomic.AddInt32(&k.holdTokenNum, -1)
-			if atomic.LoadInt32(&k.status) == keeperShutdown && k.getHoldTokenNum() == 0 && len(k.tokenReleaseChan) == 0 {
+			remainTokenNum := atomic.AddInt32(&k.holdTokenNum, -1)
+			if atomic.LoadInt32(&k.status) == keeperShutdown && remainTokenNum == 0 && len(k.tokenReleaseChan) == 0 {
 				close(k.tokenReleaseChan)
 			}
 		},
