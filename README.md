@@ -6,9 +6,9 @@
 
 ---
 
-This tiny package try to help you to better control your program's shutdown process.
+This small package aims to help you better control your program's shutdown process.
 
-It provides an easy way to perform graceful shutdown, by notifying subroutines with shutdown signal, to let them finish their work.
+It offers a simple way to perform a graceful shutdown by notifying subroutines with shutdown signals, allowing them to complete their work.
 
 ## Installation
 
@@ -17,7 +17,7 @@ go get github.com/hsldymq/shutdownKeeper
 ```
 
 ## Basic Usage
-The example below shows a basic usage of Shutdown Keeper of performing graceful shutdown for a http service.
+The example below demonstrates the basic usage of Shutdown Keeper for performing a graceful shutdown of an HTTP service.
 
 ```go
 package main
@@ -32,8 +32,8 @@ import (
 )
 
 func main() {
-	// we configure the shutdownKeeper to listen to SIGINT and SIGTERM signals
-	// and give a maximum of 20 seconds for the service to perform graceful shutdown
+	// Configure the shutdownKeeper to listen for SIGINT and SIGTERM signals,
+	// and allow a maximum of 20 seconds for the service to perform a graceful shutdown
 	keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
 		Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
 		MaxHoldTime: 20 * time.Second,
@@ -47,29 +47,29 @@ func main() {
 			}),
 		}
 		go func(token shutdownKeeper.HoldToken) {
-			// HoldToken is used to listen to the shutdown event and perform graceful shutdown.
+			// HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
 			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
 			<-token.ListenShutdown()
 
 			server.Shutdown(context.Background())
 
-			// Release the HoldToken when http server is finally shutdown.
-			// then keeper.Wait() will return.
+			// Release the HoldToken when the HTTP server is finally shut down.
+			// Then keeper.Wait() will return.
 			token.Release()
 		}(keeper.AllocHoldToken())
 		_ = server.ListenAndServe()
 	}()
 
-	// Wait will block until the main goroutine.
-	// When service receives a SIGINT or SIGTERM signal, it will keep blocking until every HoldToken is released or the MaxHoldTime is reached.
+	// Wait will block the main goroutine.
+	// When the service receives a SIGINT or SIGTERM signal, it will keep blocking until every HoldToken is released or the MaxHoldTime is reached.
 	keeper.Wait()
 }
 ```
 
 ## Shutdown by Context.Done event
-Assume that we have a long-running task, and we accept http request shutdown the task.
+Suppose we have a long-running task, and we accept an HTTP request to shut down the task.
 
-Shutdown keeper can also listen to the Context.Done event, and perform graceful shutdown.
+Shutdown Keeper can also listen to the Context.Done event and perform a graceful shutdown.
 
 ```go
 package main

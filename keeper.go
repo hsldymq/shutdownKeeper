@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// HoldToken is allocated to subroutines to listen the shutdown event, and let the subroutines finish their work.
-// each subroutine holding a HoldToken should call Release() method when it finishes its work.
-// once all the HoldTokens are released, the shutdown keeper will return from its Wait() method call.
+// HoldToken is used by subroutines to listen for shutdown events and allows subroutines to complete their work.
+// Each subroutine holding a HoldToken should call the Release() method when its work is finished.
+// Once all HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
 	ListenShutdown() <-chan struct{}
 	Release()
@@ -44,34 +44,35 @@ const (
 	keeperShutdown
 )
 
-// KeeperOpts is the options for creating ShutdownKeeper.
+// KeeperOpts contains options for creating a ShutdownKeeper.
 type KeeperOpts struct {
-	// Signals determines the signals that ShutdownKeeper will listen to.
-	// any signal in this slice will trigger the shutdown process.
+	// Signals specifies the signals that ShutdownKeeper will listen to.
+	// Any signal in this slice will trigger the shutdown process.
 	Signals []os.Signal
 
-	// Context listens to the context.Done() event, the event will trigger the shutdown process.
+	// Context listens to the context.Done() event. This event will trigger the shutdown process.
 	Context context.Context
 
-	// OnSignalShutdown that will be called when ShutdownKeeper receives any signal provided by Signals.
-	// this allows you to perform graceful shutdown by stopping the process before the program is actually shutdown.
+	// OnSignalShutdown is called when ShutdownKeeper receives any signal provided by Signals.
+	// This allows you to perform a graceful shutdown (like stop running subroutines) before the program actually shuts down.
 	// If both signal and context.Done() are triggered,
-	//	only one of OnSignalShutdown and OnContextDone will be called depending on which event is triggered first.
+	// only one of OnSignalShutdown and OnContextDone will be called, depending on which event is triggered first.
 	OnSignalShutdown func(os.Signal)
 
-	// OnContextDone will be called when ShutdownKeeper receives a context.Done() event.
+	// OnContextDone is called when ShutdownKeeper receives a context.Done() event.
 	// If both signal and context.Done() are triggered,
-	//	only one of OnSignalShutdown and OnContextDone will be called depending on which event is triggered first.
+	// only one of OnSignalShutdown and OnContextDone will be called, depending on which event is triggered first.
 	OnContextDone func()
 
 	// MaxHoldTime is the maximum time that ShutdownKeeper will wait for all HoldTokens to be released.
-	// if the time is exceeded, ShutdownKeeper.Wait() will force return.
+	// If the time is exceeded, ShutdownKeeper.Wait() will force return.
 	MaxHoldTime time.Duration
 
-	// if AlwaysHold is true, ShutdownKeeper will always hold the shutdown process for MaxHoldTime even if there is no HoldToken being allocated.
+	// If AlwaysHold is true, ShutdownKeeper will always hold the shutdown process for MaxHoldTime, even if no HoldToken is allocated.
 	AlwaysHold bool
 }
 
+// ShutdownKeeper manages the graceful shutdown process of a program.
 type ShutdownKeeper struct {
 	signals       []os.Signal
 	signalHandler func(os.Signal)
@@ -112,10 +113,10 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 	}
 }
 
-// Wait will block the current goroutine until the shutdown process is finished.
-// it will listen to the Signals and Context if they are provided.
-// once any of them is triggered, the graceful shutdown process will be performed.
-// if the ShutdownKeeper is already in shutdown status, Wait will return immediately.
+// Wait blocks the current goroutine until the shutdown process is finished.
+// It listens to Signals and Context if provided.
+// Once any of them is triggered, the graceful shutdown process will be performed.
+// If the ShutdownKeeper is already in shutdown status, Wait will return immediately.
 func (k *ShutdownKeeper) Wait() {
 	if !k.tryRun() {
 		return
@@ -161,7 +162,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 	}
 }
 
-// getHoldTokenNum returns the number of hold tokens that are not released yet.
+// getHoldTokenNum returns the number of hold tokens that have not been released yet.
 func (k *ShutdownKeeper) getHoldTokenNum() int {
 	return int(atomic.LoadInt32(&k.holdTokenNum))
 }
