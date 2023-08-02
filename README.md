@@ -51,11 +51,11 @@ func main() {
 			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
 			<-token.ListenShutdown()
 
-			server.Shutdown(context.Background())
-
 			// Release the HoldToken when the HTTP server is finally shut down.
-			// Then keeper.Wait() will return.
-			token.Release()
+			// Then the program will return.
+			defer token.Release()
+
+			server.Shutdown(context.Background())
 		}(keeper.AllocHoldToken())
 		_ = server.ListenAndServe()
 	}()
