@@ -6,7 +6,7 @@
 
 ---
 
-This small package aims to help you better control your program's shutdown process.
+This module aims to help you better control your program's shutdown process.
 
 It offers a simple way to perform a graceful shutdown by notifying subroutines with shutdown signals, allowing them to complete their work.
 
