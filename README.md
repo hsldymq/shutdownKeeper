@@ -47,13 +47,13 @@ func main() {
 			}),
 		}
 		go func(token shutdownKeeper.HoldToken) {
-			// HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
-			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
-			token.ListenShutdown()
-
 			// Release the HoldToken when the HTTP server is finally shut down.
 			// Then the program will return.
 			defer token.Release()
+			
+			// HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
+			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
+			token.ListenShutdown()
 
 			server.Shutdown(context.Background())
 		}(keeper.AllocHoldToken())
@@ -89,9 +89,10 @@ func main() {
 	})
 
 	go func(token shutdownKeeper.HoldToken) {
+		defer token.Release()
+		
 		// RunTask is used to run a task that may block this goroutine until the context is canceled.
 		RunTask(ctx)
-		token.Release()
 	}(keeper.AllocHoldToken())
 
 	go func() {
@@ -106,10 +107,11 @@ func main() {
 			}),
 		}
 		go func(token shutdownKeeper.HoldToken) {
+			defer token.Release()
+			
 			// ListenShutdown will block until the context is canceled.
 			token.ListenShutdown()
 			server.Shutdown(context.Background())
-			token.Release()
 		}(keeper.AllocHoldToken())
 		_ = server.ListenAndServe()
 	}()
