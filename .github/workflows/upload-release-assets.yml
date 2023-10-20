@@ -1,0 +1,2 @@
+- name: Yet Another Upload Release Asset Action
+  uses: shogo82148/actions-upload-release-asset@v1.7.2
