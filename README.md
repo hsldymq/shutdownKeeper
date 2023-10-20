@@ -49,7 +49,7 @@ func main() {
 		go func(token shutdownKeeper.HoldToken) {
 			// HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
 			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
-			<-token.ListenShutdown()
+			token.ListenShutdown()
 
 			// Release the HoldToken when the HTTP server is finally shut down.
 			// Then the program will return.
@@ -107,7 +107,7 @@ func main() {
 		}
 		go func(token shutdownKeeper.HoldToken) {
 			// ListenShutdown will block until the context is canceled.
-			<-token.ListenShutdown()
+			token.ListenShutdown()
 			server.Shutdown(context.Background())
 			token.Release()
 		}(keeper.AllocHoldToken())

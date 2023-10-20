@@ -76,7 +76,7 @@ func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	var actualVal int32
 	startTime := time.Now()
 	go func(token HoldToken) {
-		<-token.ListenShutdown()
+		token.ListenShutdown()
 		atomic.StoreInt32(&actualVal, 1)
 		token.Release()
 	}(keeper.AllocHoldToken())

@@ -13,7 +13,12 @@ import (
 // Each subroutine holding a HoldToken should call the Release() method when its work is finished.
 // Once all HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
-	ListenShutdown() <-chan struct{}
+	// ListenShutdown will block the current goroutine until the shutdown stage is triggered.
+	ListenShutdown()
+
+	// HoldChan returns a channel that will be closed when the shutdown stage is triggered.
+	HoldChan() <-chan struct{}
+
 	Release()
 }
 
@@ -25,6 +30,14 @@ type holdTokenImpl struct {
 	shutdownNotifyChan <-chan struct{}
 }
 
+func (kt *holdTokenImpl) ListenShutdown() {
+	<-kt.shutdownNotifyChan
+}
+
+func (kt *holdTokenImpl) HoldChan() <-chan struct{} {
+	return kt.shutdownNotifyChan
+}
+
 func (kt *holdTokenImpl) Release() {
 	kt.releaseLock.Lock()
 	defer kt.releaseLock.Unlock()
@@ -32,10 +45,6 @@ func (kt *holdTokenImpl) Release() {
 		kt.released = true
 		go kt.releasedFunc()
 	}
-}
-
-func (kt *holdTokenImpl) ListenShutdown() <-chan struct{} {
-	return kt.shutdownNotifyChan
 }
 
 const (
