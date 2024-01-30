@@ -145,12 +145,13 @@ func (k *ShutdownKeeper) Wait() {
 	}
 	<-k.shutdownEventChan
 
-	if !k.alwaysHold && k.getHoldTokenNum() == 0 {
-		return
-	}
-	select {
-	case <-time.After(k.maxHoldTime):
-	case <-k.tokenReleaseChan:
+	if k.alwaysHold {
+		<-time.After(k.maxHoldTime)
+	} else if k.getHoldTokenNum() > 0 {
+		select {
+		case <-time.After(k.maxHoldTime):
+		case <-k.tokenReleaseChan:
+		}
 	}
 }
 
