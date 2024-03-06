@@ -36,7 +36,7 @@ func main() {
 	// and allow a maximum of 20 seconds for the service to perform a graceful shutdown
 	keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
 		Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
-		MaxHoldTime: 20 * time.Second,
+		MaxHoldTime: 20 * time.Second,  // default is 30 seconds
 	})
 
 	go func() {
@@ -46,21 +46,21 @@ func main() {
 				// ...
 			}),
 		}
-		
-		go func(token shutdownKeeper.HoldToken) {
-			// Release the HoldToken when the HTTP server is finally shut down.
-			// Then the program will return.
-			defer token.Release()
-			
-			// HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
-			// ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
-			token.ListenShutdown()
 
-			server.Shutdown(context.Background())
-		}(keeper.AllocHoldToken())
+		keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
 		// Or you can use the following code to achieve the same effect:
-		// keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
-		
+		/*
+		    go func(token shutdownKeeper.HoldToken) {
+			    // Release the HoldToken when the HTTP server is finally shut down.
+			    // Then the program will return.
+			    defer token.Release()
+			
+			    // ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
+			    token.ListenShutdown()
+
+			    server.Shutdown(context.Background())
+		    }(keeper.AllocHoldToken()) // HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
+		 */
 		
 		_ = server.ListenAndServe()
 	}()
