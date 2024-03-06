@@ -70,8 +70,7 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 	var actual int32
 	ctx, cancel := context.WithCancel(context.Background())
 	keeper := NewKeeper(KeeperOpts{
-		MaxHoldTime: 5 * time.Second,
-		Context:     ctx,
+		Context: ctx,
 	})
 	keeper.OnShuttingDown(func() {
 		atomic.StoreInt32(&actual, 1)
