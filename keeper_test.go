@@ -66,6 +66,25 @@ func TestShutdownKeeper_HoldToken(t *testing.T) {
 	assert.Equal(t, 1, int(time.Now().Sub(startTime).Seconds()))
 }
 
+func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
+	var actual int32
+	ctx, cancel := context.WithCancel(context.Background())
+	keeper := NewKeeper(KeeperOpts{
+		MaxHoldTime: 5 * time.Second,
+		Context:     ctx,
+	})
+	keeper.OnShuttingDown(func() {
+		atomic.StoreInt32(&actual, 1)
+	})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		cancel()
+	}()
+
+	keeper.Wait()
+	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
+}
+
 func TestShutdownKeeper_ListenShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	keeper := NewKeeper(KeeperOpts{
