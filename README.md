@@ -46,6 +46,7 @@ func main() {
 				// ...
 			}),
 		}
+		
 		go func(token shutdownKeeper.HoldToken) {
 			// Release the HoldToken when the HTTP server is finally shut down.
 			// Then the program will return.
@@ -57,6 +58,10 @@ func main() {
 
 			server.Shutdown(context.Background())
 		}(keeper.AllocHoldToken())
+		// Or you can use the following code to achieve the same effect:
+		// keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
+		
+		
 		_ = server.ListenAndServe()
 	}()
 

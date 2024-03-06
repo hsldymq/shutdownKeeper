@@ -172,6 +172,19 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 	}
 }
 
+// OnShuttingDown registers a function to be called when the shutdown process is triggered.
+func (k *ShutdownKeeper) OnShuttingDown(f func()) {
+	if k.status == keeperShutdown {
+		return
+	}
+
+	go func(token HoldToken) {
+		defer token.Release()
+		token.ListenShutdown()
+		f()
+	}(k.AllocHoldToken())
+}
+
 // getHoldTokenNum returns the number of hold tokens that have not been released yet.
 func (k *ShutdownKeeper) getHoldTokenNum() int {
 	return int(atomic.LoadInt32(&k.holdTokenNum))
