@@ -102,6 +102,11 @@ type ShutdownKeeper struct {
 }
 
 func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
+	maxHoldTime := opts.MaxHoldTime
+	if maxHoldTime == 0 {
+		maxHoldTime = 30 * time.Second
+	}
+
 	return &ShutdownKeeper{
 		signals:       opts.Signals,
 		signalHandler: opts.OnSignalShutdown,
@@ -110,7 +115,7 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 		ctx:        opts.Context,
 		ctxHandler: opts.OnContextDone,
 
-		maxHoldTime:      opts.MaxHoldTime,
+		maxHoldTime:      maxHoldTime,
 		holdTokenNum:     0,
 		alwaysHold:       opts.AlwaysHold,
 		tokenGroup:       &sync.WaitGroup{},
