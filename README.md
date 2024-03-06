@@ -100,26 +100,18 @@ func main() {
 		RunTask(ctx)
 	}(keeper.AllocHoldToken())
 
-	go func() {
-		server := &http.Server{
-			Addr: ":8011",
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "POST" && r.URL.Path == "/shutdown" {
-					cancel()
-					return
-				}
-				// ...
-			}),
-		}
-		go func(token shutdownKeeper.HoldToken) {
-			defer token.Release()
-			
-			// ListenShutdown will block until the context is canceled.
-			token.ListenShutdown()
-			server.Shutdown(context.Background())
-		}(keeper.AllocHoldToken())
-		_ = server.ListenAndServe()
-	}()
+	server := &http.Server{
+		Addr: ":8011",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "POST" && r.URL.Path == "/shutdown" {
+				cancel()
+				return
+			}
+			// ...
+		}),
+	}
+	keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
+	go server.ListenAndServe()
 
 	// This will block until every HoldToken is released or the MaxHoldTime is reached.
 	keeper.Wait()
