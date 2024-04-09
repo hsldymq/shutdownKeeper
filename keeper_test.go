@@ -21,10 +21,11 @@ func TestShutdownKeeper_SignalShutdown(t *testing.T) {
         time.Sleep(50 * time.Millisecond)
         keeper.signalChan <- syscall.SIGINT
     }()
-
     keeper.Wait()
-    if actual != 1 {
-        t.Fatalf("expect: 1, actual: %d", actual)
+
+    actualVal := atomic.LoadInt32(&actual)
+    if actualVal != 1 {
+        t.Fatalf("expect: 1, actual: %d", actualVal)
     }
 }
 
@@ -41,10 +42,11 @@ func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
         time.Sleep(50 * time.Millisecond)
         cancel()
     }()
-
     keeper.Wait()
-    if actual != 1 {
-        t.Fatalf("expect: 1, actual: %d", actual)
+
+    actualVal := atomic.LoadInt32(&actual)
+    if actualVal != 1 {
+        t.Fatalf("expect: 1, actual: %d", actualVal)
     }
 }
 
@@ -61,10 +63,11 @@ func TestShutdownKeeper_HoldToken(t *testing.T) {
         defer token.Release()
         atomic.AddInt32(&actual, 1)
     }(keeper.AllocHoldToken())
-
     keeper.Wait()
-    if actual != 2 {
-        t.Fatalf("expect: 2, actual: %d", actual)
+
+    actualVal := atomic.LoadInt32(&actual)
+    if actualVal != 2 {
+        t.Fatalf("expect: 2, actual: %d", actualVal)
     }
 }
 
@@ -83,8 +86,10 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
     }()
 
     keeper.Wait()
-    if actual != 1 {
-        t.Fatalf("expect: 1, actual: %d", actual)
+
+    actualVal := atomic.LoadInt32(&actual)
+    if actualVal != 1 {
+        t.Fatalf("expect: 1, actual: %d", actualVal)
     }
 }
 
