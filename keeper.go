@@ -22,28 +22,9 @@ type HoldToken interface {
     Release()
 }
 
-type holdTokenImpl struct {
-    releasingFunc      func()
-    shutdownNotifyChan <-chan struct{}
-}
-
-func newHoldTokenImpl(releasingFunc func(), shutdownNotifyChan <-chan struct{}) *holdTokenImpl {
-    return &holdTokenImpl{
-        releasingFunc:      sync.OnceFunc(releasingFunc),
-        shutdownNotifyChan: shutdownNotifyChan,
-    }
-}
-
-func (kt *holdTokenImpl) ListenShutdown() {
-    <-kt.shutdownNotifyChan
-}
-
-func (kt *holdTokenImpl) HoldChan() <-chan struct{} {
-    return kt.shutdownNotifyChan
-}
-
-func (kt *holdTokenImpl) Release() {
-    kt.releasingFunc()
+type TokenAllocator interface {
+    AllocHoldToken() HoldToken
+    OnShuttingDown(func())
 }
 
 const (
@@ -239,4 +220,28 @@ func (k *ShutdownKeeper) startShutdown(eventFunc func()) bool {
 // getHoldingTokenNum returns the number of hold tokens that have not been released yet.
 func (k *ShutdownKeeper) getHoldingTokenNum() int32 {
     return atomic.LoadInt32(&k.holdingTokenNum)
+}
+
+type holdTokenImpl struct {
+    releasingFunc      func()
+    shutdownNotifyChan <-chan struct{}
+}
+
+func newHoldTokenImpl(releasingFunc func(), shutdownNotifyChan <-chan struct{}) *holdTokenImpl {
+    return &holdTokenImpl{
+        releasingFunc:      sync.OnceFunc(releasingFunc),
+        shutdownNotifyChan: shutdownNotifyChan,
+    }
+}
+
+func (kt *holdTokenImpl) ListenShutdown() {
+    <-kt.shutdownNotifyChan
+}
+
+func (kt *holdTokenImpl) HoldChan() <-chan struct{} {
+    return kt.shutdownNotifyChan
+}
+
+func (kt *holdTokenImpl) Release() {
+    kt.releasingFunc()
 }
