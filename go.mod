@@ -1,3 +1,3 @@
-module github.com/hsldymq/shutdownKeeper/v2
+module github.com/hsldymq/shutdownKeeper
 
 go 1.21
