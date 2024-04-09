@@ -6,9 +6,9 @@
 
 ---
 
-This module aims to help you better control your program's shutdown process.
+This package is designed to help you better control your program's shutdown process. 
 
-It offers a simple way to perform a graceful shutdown by notifying subroutines with shutdown signals, allowing them to complete their work.
+Its main goal is to provide you with a simple way to gracefully shut down your program.
 
 ## Installation
 
@@ -16,8 +16,8 @@ It offers a simple way to perform a graceful shutdown by notifying subroutines w
 go get github.com/hsldymq/shutdownKeeper
 ```
 
-## Basic Usage
-The example below demonstrates the basic usage of Shutdown Keeper for performing a graceful shutdown of an HTTP service.
+## Example 1: Graceful shutdown of an HTTP service
+This example below demonstrates the basic usage of Shutdown Keeper for performing a graceful shutdown of an HTTP service.
 
 ```go
 package main
@@ -47,6 +47,8 @@ func main() {
 			}),
 		}
 
+        // When the service receives a SIGINT or SIGTERM signal, shutdown keeper will not terminate the program immediately,
+        // instead, it will call registered functions to do the cleanup work,  like close the HTTP server, release resources, etc.
 		keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
 		// Or you can use the following code to achieve the same effect:
 		/*
@@ -71,7 +73,7 @@ func main() {
 }
 ```
 
-## Shutdown by Context.Done event
+## Example 2: Shutdown by Context.Done event
 Suppose we have a long-running task, and we accept an HTTP request to shut down the task.
 
 Shutdown Keeper can also listen to the Context.Done event and perform a graceful shutdown.
@@ -93,6 +95,8 @@ func main() {
 		MaxHoldTime: 20 * time.Second,
 	})
 
+    // AllocHoldToken allocates a HoldToken, the shutdown keeper tracks every tokens' status that it allocates.
+    // once shutdown process is triggered, shutdown keeper will wait for every token to be released.
 	go func(token shutdownKeeper.HoldToken) {
 		defer token.Release()
 		
@@ -104,6 +108,7 @@ func main() {
 		Addr: ":8011",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "POST" && r.URL.Path == "/shutdown" {
+                // after cancel function is called, shutdown keeper will start the graceful shutdown process.
 				cancel()
 				return
 			}
@@ -113,7 +118,6 @@ func main() {
 	keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
 	go server.ListenAndServe()
 
-	// This will block until every HoldToken is released or the MaxHoldTime is reached.
 	keeper.Wait()
 }
 ```
