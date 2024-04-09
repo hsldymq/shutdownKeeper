@@ -129,3 +129,34 @@ func TestShutdownKeeper_ForceHold(t *testing.T) {
         t.Fatalf("expect: 2, actual: %d", actual)
     }
 }
+
+func TestShutdownKeeper_CornerCases(t *testing.T) {
+    // case 1
+    keeper := NewKeeper(KeeperOpts{})
+    token := keeper.AllocHoldToken()
+    token.Release()
+    keeper.Wait()
+
+    // case 2: allocate a token and never release it. so when the keeper receives a SIGINT signal, it will hold for MaxHoldTime before shutdown.
+    keeper = NewKeeper(KeeperOpts{
+        Signals:     make([]os.Signal, syscall.SIGINT),
+        MaxHoldTime: time.Second,
+    })
+    token = keeper.AllocHoldToken()
+    go func() { keeper.signalChan <- syscall.SIGINT }()
+    keeper.Wait()
+
+    // case 3: call OnShuttingDown after shutdown does not work
+    keeper = NewKeeper(KeeperOpts{})
+    token = keeper.AllocHoldToken()
+    token.Release()
+    keeper.Wait()
+    var actual int32 = 0
+    keeper.OnShuttingDown(func() {
+        actual = 1
+    })
+    keeper.Wait()
+    if actual != 0 {
+        t.Fatalf("expect: 0, actual: %d", actual)
+    }
+}
