@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// HoldToken is used by subroutines to listen for shutdown events and allows subroutines to complete their work.
-// Each subroutine holding a HoldToken should call the Release() method when its work is finished.
+// HoldToken is used by subroutines to listen for shutdown events. It allows subroutines to complete their work.
+// Each subroutine that holding a HoldToken should call the Release() method after it finishes its work.
 // Once all HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
 	// ListenShutdown will block the current goroutine until the shutdown stage is triggered.
@@ -23,11 +23,15 @@ type HoldToken interface {
 }
 
 type holdTokenImpl struct {
-	released     bool
-	releasedFunc func()
-	releaseLock  *sync.Mutex
-
+	releasingFunc      func()
 	shutdownNotifyChan <-chan struct{}
+}
+
+func newHoldTokenImpl(releasingFunc func(), shutdownNotifyChan <-chan struct{}) *holdTokenImpl {
+	return &holdTokenImpl{
+		releasingFunc:      sync.OnceFunc(releasingFunc),
+		shutdownNotifyChan: shutdownNotifyChan,
+	}
 }
 
 func (kt *holdTokenImpl) ListenShutdown() {
@@ -39,66 +43,61 @@ func (kt *holdTokenImpl) HoldChan() <-chan struct{} {
 }
 
 func (kt *holdTokenImpl) Release() {
-	kt.releaseLock.Lock()
-	defer kt.releaseLock.Unlock()
-	if !kt.released {
-		kt.released = true
-		go kt.releasedFunc()
-	}
+	kt.releasingFunc()
 }
 
 const (
-	keeperInit int32 = iota
-	keeperRunning
-	keeperShutdown
+	_ int32 = iota
+	statusReady
+	statusWaiting
+	statusShutting
+	statusShutdown
 )
 
 // KeeperOpts contains options for creating a ShutdownKeeper.
 type KeeperOpts struct {
-	// Signals specifies the signals that ShutdownKeeper will listen to.
-	// Any signal in this slice will trigger the shutdown process.
+	// Signals specifies the signals that ShutdownKeeper will listen for (for example, syscall.SIGINT, syscall.SIGTERM).
+	// Receiving any signal from this list will trigger the shutdown process.
 	Signals []os.Signal
 
-	// Context listens to the context.Done() event. This event will trigger the shutdown process.
-	Context context.Context
-
 	// OnSignalShutdown is called when ShutdownKeeper receives any signal provided by Signals.
-	// This allows you to perform a graceful shutdown (like stop running subroutines) before the program actually shuts down.
-	// If both signal and context.Done() are triggered,
-	// only one of OnSignalShutdown and OnContextDone will be called, depending on which event is triggered first.
 	OnSignalShutdown func(os.Signal)
 
+	// Context is used to listen for the context.Done() event, which will trigger the shutdown process.
+	Context context.Context
+
 	// OnContextDone is called when ShutdownKeeper receives a context.Done() event.
-	// If both signal and context.Done() are triggered,
-	// only one of OnSignalShutdown and OnContextDone will be called, depending on which event is triggered first.
 	OnContextDone func()
 
-	// MaxHoldTime is the maximum time that ShutdownKeeper will wait for all HoldTokens to be released.
+	// MaxHoldTime is the maximum time that ShutdownKeeper will wait for all HoldTokens to be released when shutdown process is triggered.
 	// If the time is exceeded, ShutdownKeeper.Wait() will force return.
+	// The default value of MaxHoldTime is 30 seconds.
 	MaxHoldTime time.Duration
 
-	// If AlwaysHold is true, ShutdownKeeper will always hold the shutdown process for MaxHoldTime, even if no HoldToken is allocated.
-	AlwaysHold bool
+	// If ForceHold is true, ShutdownKeeper will always hold the shutdown process for MaxHoldTime, even if no HoldToken is allocated or all the HoldTokens are released.
+	ForceHold bool
 }
 
 // ShutdownKeeper manages the graceful shutdown process of a program.
 type ShutdownKeeper struct {
-	signals       []os.Signal
+	signals []os.Signal
+
 	signalHandler func(os.Signal)
 	signalChan    chan os.Signal
 
-	ctx        context.Context
-	ctxHandler func()
+	ctx            context.Context
+	ctxDoneHandler func()
 
-	maxHoldTime      time.Duration
-	holdTokenNum     int32
-	alwaysHold       bool
-	tokenGroup       *sync.WaitGroup
-	tokenReleaseChan chan struct{}
+	maxHoldTime           time.Duration
+	forceHold             bool
+	holdingTokenNum       int32
+	shutdownHoldChan      chan struct{}
+	closeShutdownHoldChan func()
 
-	status             int32
-	shutdownEventChan  chan struct{}
-	shutdownNotifyChan chan struct{}
+	shuttingNotifyChan chan struct{}
+
+	status       int32
+	shutdownChan chan struct{}
 }
 
 func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
@@ -107,24 +106,29 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 		maxHoldTime = 30 * time.Second
 	}
 
-	return &ShutdownKeeper{
+	keeper := &ShutdownKeeper{
 		signals:       opts.Signals,
 		signalHandler: opts.OnSignalShutdown,
 		signalChan:    make(chan os.Signal, 1),
 
-		ctx:        opts.Context,
-		ctxHandler: opts.OnContextDone,
+		ctx:            opts.Context,
+		ctxDoneHandler: opts.OnContextDone,
 
 		maxHoldTime:      maxHoldTime,
-		holdTokenNum:     0,
-		alwaysHold:       opts.AlwaysHold,
-		tokenGroup:       &sync.WaitGroup{},
-		tokenReleaseChan: make(chan struct{}),
+		forceHold:        opts.ForceHold,
+		holdingTokenNum:  0,
+		shutdownHoldChan: make(chan struct{}),
 
-		status:             keeperInit,
-		shutdownEventChan:  make(chan struct{}),
-		shutdownNotifyChan: make(chan struct{}),
+		shuttingNotifyChan: make(chan struct{}),
+
+		status:       statusReady,
+		shutdownChan: make(chan struct{}),
 	}
+	keeper.closeShutdownHoldChan = sync.OnceFunc(func() {
+		close(keeper.shutdownHoldChan)
+	})
+
+	return keeper
 }
 
 // Wait blocks the current goroutine until the shutdown process is finished.
@@ -132,54 +136,47 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 // Once any of them is triggered, the graceful shutdown process will be performed.
 // If the ShutdownKeeper is already in shutdown status, Wait will return immediately.
 func (k *ShutdownKeeper) Wait() {
-	if !k.tryRun() {
+	if !k.canWait() {
 		return
 	}
 
-	go func() {
-		<-k.shutdownEventChan
-		defer func() { _ = recover() }()
-		close(k.shutdownNotifyChan)
-	}()
-
-	if len(k.signals) == 0 && k.ctx == nil {
+	if len(k.signals) == 0 && k.ctx == nil && k.getHoldingTokenNum() == 0 {
 		k.startShutdown(nil)
 	} else {
 		go k.listenSignals()
 		go k.listenContext()
 	}
-	<-k.shutdownEventChan
+	<-k.shuttingNotifyChan
 
-	if k.alwaysHold {
+	if k.forceHold {
 		<-time.After(k.maxHoldTime)
-	} else if k.getHoldTokenNum() > 0 {
+	} else if k.getHoldingTokenNum() > 0 {
 		select {
 		case <-time.After(k.maxHoldTime):
-		case <-k.tokenReleaseChan:
+		case <-k.shutdownHoldChan:
 		}
 	}
+
+	atomic.StoreInt32(&k.status, statusShutdown)
+	close(k.shutdownChan)
 }
 
 // AllocHoldToken allocates a hold token.
 func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
-	atomic.AddInt32(&k.holdTokenNum, 1)
-	k.tokenGroup.Add(1)
-	return &holdTokenImpl{
-		releaseLock: &sync.Mutex{},
-		releasedFunc: func() {
-			k.tokenGroup.Done()
-			remainTokenNum := atomic.AddInt32(&k.holdTokenNum, -1)
-			if atomic.LoadInt32(&k.status) == keeperShutdown && remainTokenNum == 0 && len(k.tokenReleaseChan) == 0 {
-				close(k.tokenReleaseChan)
+	atomic.AddInt32(&k.holdingTokenNum, 1)
+	return newHoldTokenImpl(func() {
+		if atomic.AddInt32(&k.holdingTokenNum, -1) == 0 {
+			k.closeShutdownHoldChan()
+			if k.status == statusWaiting {
+				k.startShutdown(nil)
 			}
-		},
-		shutdownNotifyChan: k.shutdownNotifyChan,
-	}
+		}
+	}, k.shuttingNotifyChan)
 }
 
 // OnShuttingDown registers a function to be called when the shutdown process is triggered.
 func (k *ShutdownKeeper) OnShuttingDown(f func()) {
-	if k.status == keeperShutdown {
+	if k.status != statusReady && k.status != statusWaiting {
 		return
 	}
 
@@ -190,25 +187,20 @@ func (k *ShutdownKeeper) OnShuttingDown(f func()) {
 	}(k.AllocHoldToken())
 }
 
-// getHoldTokenNum returns the number of hold tokens that have not been released yet.
-func (k *ShutdownKeeper) getHoldTokenNum() int {
-	return int(atomic.LoadInt32(&k.holdTokenNum))
-}
-
 func (k *ShutdownKeeper) listenSignals() {
 	if len(k.signals) == 0 {
 		return
 	}
 
 	signal.Notify(k.signalChan, k.signals...)
-	s := <-k.signalChan
-	k.startShutdown(func(s os.Signal) func() {
-		return func() {
-			if k.signalHandler != nil {
-				k.signalHandler(s)
-			}
+	select {
+	case s := <-k.signalChan:
+		k.startShutdown(nil)
+		if k.signalHandler != nil {
+			k.signalHandler(s)
 		}
-	}(s))
+	case <-k.shutdownChan:
+	}
 }
 
 func (k *ShutdownKeeper) listenContext() {
@@ -216,21 +208,29 @@ func (k *ShutdownKeeper) listenContext() {
 		return
 	}
 
-	<-k.ctx.Done()
-	k.startShutdown(k.ctxHandler)
+	select {
+	case <-k.ctx.Done():
+		k.startShutdown(k.ctxDoneHandler)
+	case <-k.shutdownChan:
+	}
 }
 
-func (k *ShutdownKeeper) tryRun() bool {
-	return atomic.CompareAndSwapInt32(&k.status, keeperInit, keeperRunning)
+func (k *ShutdownKeeper) canWait() bool {
+	return atomic.CompareAndSwapInt32(&k.status, statusReady, statusWaiting)
 }
 
-func (k *ShutdownKeeper) startShutdown(eventCallbackFunc func()) bool {
-	if atomic.CompareAndSwapInt32(&k.status, keeperRunning, keeperShutdown) {
-		if eventCallbackFunc != nil {
-			eventCallbackFunc()
+func (k *ShutdownKeeper) startShutdown(eventFunc func()) bool {
+	if atomic.CompareAndSwapInt32(&k.status, statusWaiting, statusShutting) || atomic.CompareAndSwapInt32(&k.status, statusReady, statusShutting) {
+		defer close(k.shuttingNotifyChan)
+		if eventFunc != nil {
+			eventFunc()
 		}
-		close(k.shutdownEventChan)
 		return true
 	}
 	return false
+}
+
+// getHoldingTokenNum returns the number of hold tokens that have not been released yet.
+func (k *ShutdownKeeper) getHoldingTokenNum() int32 {
+	return atomic.LoadInt32(&k.holdingTokenNum)
 }

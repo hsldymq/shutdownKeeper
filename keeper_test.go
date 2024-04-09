@@ -46,24 +46,21 @@ func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
 }
 
 func TestShutdownKeeper_HoldToken(t *testing.T) {
-	keeper := NewKeeper(KeeperOpts{
-		MaxHoldTime: 5 * time.Second,
-	})
+	keeper := NewKeeper(KeeperOpts{})
 
-	startTime := time.Now()
-
+	var actual int32
 	go func(token HoldToken) {
-		time.Sleep(1 * time.Second)
-		token.Release()
+		defer token.Release()
+		atomic.AddInt32(&actual, 1)
 	}(keeper.AllocHoldToken())
 
 	go func(token HoldToken) {
-		time.Sleep(1 * time.Second)
-		token.Release()
+		defer token.Release()
+		atomic.AddInt32(&actual, 1)
 	}(keeper.AllocHoldToken())
 
 	keeper.Wait()
-	assert.Equal(t, 1, int(time.Now().Sub(startTime).Seconds()))
+	assert.Equal(t, int32(2), actual)
 }
 
 func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
@@ -76,7 +73,7 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 		atomic.StoreInt32(&actual, 1)
 	})
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
 
@@ -84,56 +81,29 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&actual))
 }
 
-func TestShutdownKeeper_ListenShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewKeeper(KeeperOpts{
-		Context:     ctx,
-		MaxHoldTime: 20 * time.Second,
-	})
-
-	var actualVal int32
-	startTime := time.Now()
-	go func(token HoldToken) {
-		token.ListenShutdown()
-		atomic.StoreInt32(&actualVal, 1)
-		token.Release()
-	}(keeper.AllocHoldToken())
-
-	go func() {
-		time.Sleep(2 * time.Second)
-		cancel()
-	}()
-	keeper.Wait()
-
-	assert.Equal(t, 2, int(time.Now().Sub(startTime).Seconds()))
-	assert.Equal(t, int32(1), atomic.LoadInt32(&actualVal))
-}
-
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
 	keeper := NewKeeper(KeeperOpts{
-		Signals:    []os.Signal{syscall.SIGINT},
-		Context:    ctx,
-		AlwaysHold: true,
+		MaxHoldTime: 2 * time.Second,
+		ForceHold:   true,
 	})
-	go func() {
-		keeper.signalChan <- syscall.SIGINT
-		cancel()
-	}()
-
+	token := keeper.AllocHoldToken()
+	go token.Release()
 	keeper.Wait()
 
+	keeper.maxHoldTime = 10 * time.Second
 	startTime := time.Now()
-	keeper.maxHoldTime = 60 * time.Second
 	keeper.Wait()
 	assert.Equal(t, 0, int(time.Now().Sub(startTime).Seconds()))
 }
 
-func TestShutdownKeeper_AlwaysHold(t *testing.T) {
+func TestShutdownKeeper_ForceHold(t *testing.T) {
 	keeper := NewKeeper(KeeperOpts{
-		AlwaysHold:  true,
+		ForceHold:   true,
 		MaxHoldTime: 2 * time.Second,
 	})
+
+	token := keeper.AllocHoldToken()
+	go token.Release()
 
 	startTime := time.Now()
 	keeper.Wait()
