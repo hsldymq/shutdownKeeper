@@ -97,12 +97,12 @@ func main() {
 
     // AllocHoldToken allocates a HoldToken, the shutdown keeper tracks every tokens' status that it allocates.
     // once shutdown process is triggered, shutdown keeper will wait for every token to be released.
-	go func(token shutdownKeeper.HoldToken) {
-		defer token.Release()
-		
-		// RunTask is used to run a task that may block this goroutine until the context is canceled.
-		RunTask(ctx)
-	}(keeper.AllocHoldToken())
+    go func(token shutdownKeeper.HoldToken) {
+        defer token.Release()
+
+        // RunTask is used to run a task that may block this goroutine until the context is canceled.
+        RunTask(token.Context())
+    }(keeper.AllocHoldToken())
 
 	server := &http.Server{
 		Addr: ":8011",
