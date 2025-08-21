@@ -9,48 +9,175 @@ import (
 )
 
 func TestShutdownKeeper_SignalShutdown(t *testing.T) {
-	var actual int32
 	keeper := NewKeeper(KeeperOpts{
 		Signals: []os.Signal{syscall.SIGINT},
-		OnSignal: func(_ os.Signal, shutdownFunc ShutdownFunc) {
-			atomic.StoreInt32(&actual, 1)
-			shutdownFunc()
-		},
 	})
+	start := time.Now()
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		keeper.signalChan <- syscall.SIGINT
 	}()
 	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
 
-	actualVal := atomic.LoadInt32(&actual)
-	if actualVal != 1 {
-		t.Fatalf("expect: 1, actual: %d", actualVal)
+	if elapsed < 0.5 || elapsed >= 0.6 {
+		t.Fatalf("Expected shutdown time to be at least 0.5 seconds and less than 0.6 seconds, got: %f seconds", elapsed)
 	}
 }
 
-func TestShutdownKeeper_HoldToken(t *testing.T) {
-	keeper := NewKeeper(KeeperOpts{})
+func TestShutdownKeeper_SignalCustomShutdown(t *testing.T) {
+	signalCount := 0
+	keeper := NewKeeper(KeeperOpts{
+		Signals: []os.Signal{syscall.SIGINT},
+		OnSignal: func(signal os.Signal, shutdown ShutdownFunc) {
+			signalCount++
+			if signalCount >= 2 {
+				shutdown()
+			}
+		},
+	})
+	start := time.Now()
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		keeper.signalChan <- syscall.SIGINT
+	}()
+	go func() {
+		time.Sleep(time.Second)
+		keeper.signalChan <- syscall.SIGINT
+	}()
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
 
+	if elapsed < 1 || elapsed >= 1.1 {
+		t.Fatalf("Expected shutdown time to be at least 1 second and less than 1.1 seconds, got: %f seconds", elapsed)
+	}
+	if signalCount != 2 {
+		t.Fatalf("Expected signal count to be 2, got: %d", signalCount)
+	}
+}
+
+func TestShutdownKeeper_HoldTokens(t *testing.T) {
+	keeper := NewKeeper(KeeperOpts{
+		Signals: []os.Signal{syscall.SIGINT},
+	})
+
+	start := time.Now()
 	var actual int32
 	go func(token HoldToken) {
 		defer token.Release()
+		token.ListenShutdown()
+
+		time.Sleep(time.Second)
 		atomic.AddInt32(&actual, 1)
 	}(keeper.AllocHoldToken())
 
 	go func(token HoldToken) {
 		defer token.Release()
+		token.ListenShutdown()
+
+		time.Sleep(500 * time.Millisecond)
 		atomic.AddInt32(&actual, 1)
 	}(keeper.AllocHoldToken())
-	keeper.Wait()
 
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		keeper.signalChan <- syscall.SIGINT
+	}()
+
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	if elapsed < 1.5 || elapsed >= 1.6 {
+		t.Fatalf("Expected shutdown time to be at least 1.5 seconds and less than 1.6 seconds, got: %f seconds", elapsed)
+	}
 	actualVal := atomic.LoadInt32(&actual)
 	if actualVal != 2 {
 		t.Fatalf("expect: 2, actual: %d", actualVal)
 	}
 }
 
+func TestShutdownKeeper_ShutdownWhenAllHoldTokensReleased(t *testing.T) {
+	keeper := NewKeeper(KeeperOpts{
+		ShutdownWhenNoHoldTokens: true,
+	})
+
+	start := time.Now()
+	var actual int32
+	go func(token HoldToken) {
+		defer token.Release()
+
+		time.Sleep(time.Second)
+		atomic.AddInt32(&actual, 1)
+	}(keeper.AllocHoldToken())
+
+	go func(token HoldToken) {
+		defer token.Release()
+
+		time.Sleep(500 * time.Millisecond)
+		atomic.AddInt32(&actual, 1)
+	}(keeper.AllocHoldToken())
+
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	if elapsed < 1 || elapsed >= 1.1 {
+		t.Fatalf("Expected shutdown time to be at least 1 second and less than 1.1 seconds, got: %f seconds", elapsed)
+	}
+	actualVal := atomic.LoadInt32(&actual)
+	if actualVal != 2 {
+		t.Fatalf("expect: 2, actual: %d", actualVal)
+	}
+}
+
+func TestShutdownKeeper_MaxHoldTime(t *testing.T) {
+	keeper := NewKeeper(KeeperOpts{
+		Signals:     []os.Signal{syscall.SIGINT},
+		MaxHoldTime: 1 * time.Second,
+	})
+
+	start := time.Now()
+	go func(token HoldToken) {
+		defer token.Release()
+		token.ListenShutdown()
+		time.Sleep(5 * time.Second)
+	}(keeper.AllocHoldToken())
+
+	keeper.signalChan <- syscall.SIGINT
+
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	if elapsed < 1 || elapsed >= 1.1 {
+		t.Fatalf("Expected shutdown time to be at least 1 second and less than 1.1 seconds, got: %f seconds", elapsed)
+	}
+}
+
+func TestShutdownKeeper_AlwaysHoldMaxTime(t *testing.T) {
+	keeper := NewKeeper(KeeperOpts{
+		Signals:           []os.Signal{syscall.SIGINT},
+		MaxHoldTime:       2 * time.Second,
+		AlwaysHoldMaxTime: true,
+	})
+
+	start := time.Now()
+	go func(token HoldToken) {
+		defer token.Release()
+		token.ListenShutdown()
+		time.Sleep(500 * time.Millisecond)
+	}(keeper.AllocHoldToken())
+
+	keeper.signalChan <- syscall.SIGINT
+
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	if elapsed < 2 || elapsed >= 2.1 {
+		t.Fatalf("Expected shutdown time to be at least 2 seconds and less than 2.1 seconds, got: %f seconds", elapsed)
+	}
+}
+
 func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
+	// case 1
 	var actual int32
 	keeper := NewKeeper(KeeperOpts{})
 	keeper.OnShuttingDown(func() {
@@ -67,72 +194,45 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 	if actualVal != 1 {
 		t.Fatalf("expect: 1, actual: %d", actualVal)
 	}
-}
 
-func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
-	keeper := NewKeeper(KeeperOpts{
-		MaxHoldTime:       2 * time.Second,
-		AlwaysHoldMaxTime: true,
-	})
-	token := keeper.AllocHoldToken()
-	go token.Release()
-	keeper.Wait()
-
-	keeper.maxHoldTime = 10 * time.Second
-	startTime := time.Now()
-	keeper.Wait()
-
-	actual := int(time.Now().Sub(startTime).Seconds())
-	if actual != 0 {
-		t.Fatalf("expect: 0, actual: %d", actual)
-	}
-}
-
-func TestShutdownKeeper_ForceHold(t *testing.T) {
-	keeper := NewKeeper(KeeperOpts{
-		AlwaysHoldMaxTime: true,
-		MaxHoldTime:       2 * time.Second,
-	})
-
-	token := keeper.AllocHoldToken()
-	go token.Release()
-
-	startTime := time.Now()
-	keeper.Wait()
-
-	actual := int(time.Now().Sub(startTime).Seconds())
-	if actual != 2 {
-		t.Fatalf("expect: 2, actual: %d", actual)
-	}
-}
-
-func TestShutdownKeeper_CornerCases(t *testing.T) {
-	// case 1
-	keeper := NewKeeper(KeeperOpts{})
-	token := keeper.AllocHoldToken()
-	token.Release()
-	keeper.Wait()
-
-	// case 2: allocate a token and never release it. so when the keeper receives a SIGINT signal, it will hold for MaxHoldTime before shutdown.
+	// case 2: call OnShuttingDown after shutdown
 	keeper = NewKeeper(KeeperOpts{
-		Signals:     make([]os.Signal, syscall.SIGINT),
-		MaxHoldTime: time.Second,
+		ShutdownWhenNoHoldTokens: true,
 	})
-	token = keeper.AllocHoldToken()
-	go func() { keeper.signalChan <- syscall.SIGINT }()
-	keeper.Wait()
-
-	// case 3: call OnShuttingDown after shutdown does not work
-	keeper = NewKeeper(KeeperOpts{})
-	token = keeper.AllocHoldToken()
+	token := keeper.AllocHoldToken()
 	token.Release()
 	keeper.Wait()
-	var actual int32 = 0
+	actual = 0
 	keeper.OnShuttingDown(func() {
 		actual = 1
 	})
 	keeper.Wait()
 	if actual != 0 {
-		t.Fatalf("expect: 0, actual: %d", actual)
+		t.Fatalf("the OnShuttingDown callback should not be called after shutdown, expect: 0, actual: %d", actual)
+	}
+}
+
+func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
+	keeper := NewKeeper(KeeperOpts{
+		ShutdownWhenNoHoldTokens: true,
+
+		MaxHoldTime:       1 * time.Second,
+		AlwaysHoldMaxTime: true,
+	})
+
+	go func(token HoldToken) {
+		defer token.Release()
+		time.Sleep(500 * time.Millisecond)
+	}(keeper.AllocHoldToken())
+
+	keeper.Wait()
+
+	keeper.maxHoldTime = 10 * time.Second
+	start := time.Now()
+	keeper.Wait()
+	elapsed := time.Since(start).Seconds()
+
+	if elapsed > 0.01 {
+		t.Fatalf("Expected second Wait to return immediately, but it took: %f seconds", elapsed)
 	}
 }
