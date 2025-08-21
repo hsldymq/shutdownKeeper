@@ -1,7 +1,6 @@
 package v2
 
 import (
-	"context"
 	"os"
 	"sync/atomic"
 	"syscall"
@@ -13,34 +12,14 @@ func TestShutdownKeeper_SignalShutdown(t *testing.T) {
 	var actual int32
 	keeper := NewKeeper(KeeperOpts{
 		Signals: []os.Signal{syscall.SIGINT},
-		OnSignal: func(_ os.Signal) {
+		OnSignal: func(_ os.Signal, shutdownFunc ShutdownFunc) {
 			atomic.StoreInt32(&actual, 1)
+			shutdownFunc()
 		},
 	})
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		keeper.signalChan <- syscall.SIGINT
-	}()
-	keeper.Wait()
-
-	actualVal := atomic.LoadInt32(&actual)
-	if actualVal != 1 {
-		t.Fatalf("expect: 1, actual: %d", actualVal)
-	}
-}
-
-func TestShutdownKeeper_ContextDownShutdown(t *testing.T) {
-	var actual int32
-	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewKeeper(KeeperOpts{
-		Context: ctx,
-		OnContextDone: func() {
-			atomic.StoreInt32(&actual, 1)
-		},
-	})
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
 	}()
 	keeper.Wait()
 
@@ -73,16 +52,13 @@ func TestShutdownKeeper_HoldToken(t *testing.T) {
 
 func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 	var actual int32
-	ctx, cancel := context.WithCancel(context.Background())
-	keeper := NewKeeper(KeeperOpts{
-		Context: ctx,
-	})
+	keeper := NewKeeper(KeeperOpts{})
 	keeper.OnShuttingDown(func() {
 		atomic.StoreInt32(&actual, 1)
 	})
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		cancel()
+		keeper.StartShutdown()
 	}()
 
 	keeper.Wait()
