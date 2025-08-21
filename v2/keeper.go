@@ -149,12 +149,10 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 // StartShutdown initiates the shutdown process.
 func (k *ShutdownKeeper) StartShutdown() {
 	if atomic.CompareAndSwapInt32(&k.status, statusWaiting, statusShutting) || atomic.CompareAndSwapInt32(&k.status, statusReady, statusShutting) {
+		for _, fn := range k.shutdownCallbackFuncs {
+			fn()
+		}
 		k.shuttingFunc()
-		go func() {
-			for _, fn := range k.shutdownCallbackFuncs {
-				fn()
-			}
-		}()
 	}
 }
 
