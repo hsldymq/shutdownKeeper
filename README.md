@@ -64,9 +64,9 @@ func main() {
     }(token)
 
     // The above code has an equivalent shortcut, namely the following code:
-    keeper.AllocHoldToken().GoWaitAndRun(func(ctx context.Context) {
+    keeper.AllocHoldToken().GoWaitAndRun(func(deadlineCtx context.Context) {
         // Executes when shutdown signal is received
-        server.Shutdown(ctx)
+        server.Shutdown(deadlineCtx)
     })
 
     fmt.Println("HTTP service started on port 8080")
@@ -106,14 +106,14 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 
 ```go
 func runMessageConsuming(consumer Consumer, token v2.HoldToken) {    
-    token.GoWaitAndRun(func(ctx context.Context) {
+    token.GoWaitAndRun(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("Message consumer received shutdown signal, stopping new message reception...")
-        consumer.StopReceiving(ctx)
+        consumer.StopReceiving(deadlineCtx)
         
         // Process remaining received messages
-        consumer.ProcessRemainingMessages(ctx)
+        consumer.ProcessRemainingMessages(deadlineCtx)
         fmt.Println("Message consumer safely shut down")
     })
     consumer.StartConsuming() // Block consuming messages

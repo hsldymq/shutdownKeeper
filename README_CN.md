@@ -62,9 +62,9 @@ func main() {
     }(token)
 
     // 上面的代码还有一个等价的快捷方式, 即如下代码:
-    keeper.AllocHoldToken().GoWaitAndRun(func(ctx context.Context) {
+    keeper.AllocHoldToken().GoWaitAndRun(func(deadlineCtx context.Context) {
         // 当收到关闭信号时会执行
-        server.Shutdown(ctx)
+        server.Shutdown(deadlineCtx)
     })
 
     fmt.Println("HTTP 服务启动在端口 8080")
@@ -104,14 +104,14 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 
 ```go
 func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
-    token.GoWaitAndRun(func(ctx context.Context) {
+    token.GoWaitAndRun(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("消息消费者收到关闭信号,停止接收新消息...")
-        consumer.StopReceiving(ctx)
+        consumer.StopReceiving(deadlineCtx)
         
         // 处理完已接收的消息
-        consumer.ProcessRemainingMessages(ctx)
+        consumer.ProcessRemainingMessages(deadlineCtx)
         fmt.Println("消息消费者已安全关闭")
     })
     consumer.StartConsuming() // 阻塞消费消息
