@@ -169,16 +169,18 @@ func TestShutdownKeeper_CleanupTaskReachHoldingDeadline(t *testing.T) {
         MaxHoldTime: 2 * time.Second,
     })
 
-    elapsed := float64(0)
+    elapsedChan := make(chan float64)
     keeper.AllocHoldToken().GoListenThenDo(func(ctx context.Context) {
         start := time.Now()
         <-ctx.Done()
-        elapsed = time.Since(start).Seconds()
+        elapsed := time.Since(start).Seconds()
+        elapsedChan <- elapsed
     })
 
     keeper.signalChan <- syscall.SIGINT
     keeper.Wait()
 
+    elapsed := <-elapsedChan
     if elapsed < 2 || elapsed >= 2.1 {
         t.Fatalf("Expected the cleanup task to reach the max hold time, which should be at least 2 seconds and less than 2.1 seconds, but got: %f seconds.", elapsed)
     }
