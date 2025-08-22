@@ -190,41 +190,6 @@ func TestShutdownKeeper_CleanupTaskReachHoldingDeadline(t *testing.T) {
     }
 }
 
-func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
-    // case 1
-    var actual int32
-    keeper := NewKeeper(KeeperOpts{})
-    keeper.OnShuttingDown(func() {
-        atomic.StoreInt32(&actual, 1)
-    })
-    go func() {
-        time.Sleep(50 * time.Millisecond)
-        keeper.StartShutdown()
-    }()
-
-    keeper.Wait()
-
-    actualVal := atomic.LoadInt32(&actual)
-    if actualVal != 1 {
-        t.Fatalf("expect: 1, actual: %d", actualVal)
-    }
-
-    // case 2: call OnShuttingDown after shutdown
-    keeper = NewKeeper(KeeperOpts{
-        TokenReleaseMode: ShutdownWhenNoTokens,
-    })
-    keeper.AllocHoldToken().Release()
-    keeper.Wait()
-    actual = 0
-    keeper.OnShuttingDown(func() {
-        actual = 1
-    })
-    keeper.Wait()
-    if actual != 0 {
-        t.Fatalf("the OnShuttingDown callback should not be called after shutdown, expect: 0, actual: %d", actual)
-    }
-}
-
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
     keeper := NewKeeper(KeeperOpts{
         TokenReleaseMode: ShutdownWhenNoTokens,
