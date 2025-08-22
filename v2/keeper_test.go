@@ -63,21 +63,15 @@ func TestShutdownKeeper_HoldTokens(t *testing.T) {
 
 	start := time.Now()
 	var actual int32
-	go func(token HoldToken) {
-		defer token.Release()
-		token.ListenShutdown()
-
+	keeper.AllocHoldToken().GoWaitAndRun(func() {
 		time.Sleep(time.Second)
 		atomic.AddInt32(&actual, 1)
-	}(keeper.AllocHoldToken())
+	})
 
-	go func(token HoldToken) {
-		defer token.Release()
-		token.ListenShutdown()
-
+	keeper.AllocHoldToken().GoWaitAndRun(func() {
 		time.Sleep(500 * time.Millisecond)
 		atomic.AddInt32(&actual, 1)
-	}(keeper.AllocHoldToken())
+	})
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -98,24 +92,21 @@ func TestShutdownKeeper_HoldTokens(t *testing.T) {
 
 func TestShutdownKeeper_ShutdownWhenAllHoldTokensReleased(t *testing.T) {
 	keeper := NewKeeper(KeeperOpts{
-		ShutdownWhenNoHoldTokens: true,
+		TokenReleaseMode: ShutdownWhenNoTokens,
 	})
 
 	start := time.Now()
 	var actual int32
-	go func(token HoldToken) {
-		defer token.Release()
 
+	keeper.AllocHoldToken().GoRun(func() {
 		time.Sleep(time.Second)
 		atomic.AddInt32(&actual, 1)
-	}(keeper.AllocHoldToken())
+	})
 
-	go func(token HoldToken) {
-		defer token.Release()
-
+	keeper.AllocHoldToken().GoRun(func() {
 		time.Sleep(500 * time.Millisecond)
 		atomic.AddInt32(&actual, 1)
-	}(keeper.AllocHoldToken())
+	})
 
 	keeper.Wait()
 	elapsed := time.Since(start).Seconds()
@@ -136,11 +127,9 @@ func TestShutdownKeeper_MaxHoldTime(t *testing.T) {
 	})
 
 	start := time.Now()
-	go func(token HoldToken) {
-		defer token.Release()
-		token.ListenShutdown()
+	keeper.AllocHoldToken().GoWaitAndRun(func() {
 		time.Sleep(5 * time.Second)
-	}(keeper.AllocHoldToken())
+	})
 
 	keeper.signalChan <- syscall.SIGINT
 
@@ -160,12 +149,9 @@ func TestShutdownKeeper_AlwaysHoldMaxTime(t *testing.T) {
 	})
 
 	start := time.Now()
-	go func(token HoldToken) {
-		defer token.Release()
-		token.ListenShutdown()
+	keeper.AllocHoldToken().GoWaitAndRun(func() {
 		time.Sleep(500 * time.Millisecond)
-	}(keeper.AllocHoldToken())
-
+	})
 	keeper.signalChan <- syscall.SIGINT
 
 	keeper.Wait()
@@ -197,10 +183,9 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 
 	// case 2: call OnShuttingDown after shutdown
 	keeper = NewKeeper(KeeperOpts{
-		ShutdownWhenNoHoldTokens: true,
+		TokenReleaseMode: ShutdownWhenNoTokens,
 	})
-	token := keeper.AllocHoldToken()
-	token.Release()
+	keeper.AllocHoldToken().Release()
 	keeper.Wait()
 	actual = 0
 	keeper.OnShuttingDown(func() {
@@ -214,16 +199,15 @@ func TestShutdownKeeper_OnShuttingDown(t *testing.T) {
 
 func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
 	keeper := NewKeeper(KeeperOpts{
-		ShutdownWhenNoHoldTokens: true,
+		TokenReleaseMode: ShutdownWhenNoTokens,
 
 		MaxHoldTime:       1 * time.Second,
 		AlwaysHoldMaxTime: true,
 	})
 
-	go func(token HoldToken) {
-		defer token.Release()
+	keeper.AllocHoldToken().GoRun(func() {
 		time.Sleep(500 * time.Millisecond)
-	}(keeper.AllocHoldToken())
+	})
 
 	keeper.Wait()
 
