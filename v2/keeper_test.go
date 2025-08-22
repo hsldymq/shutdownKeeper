@@ -119,6 +119,18 @@ func TestShutdownKeeper_ShutdownWhenAllHoldTokensReleased(t *testing.T) {
     if actualVal != 2 {
         t.Fatalf("expect: 2, actual: %d", actualVal)
     }
+
+    // case 2:
+    keeper = NewKeeper(KeeperOpts{
+        TokenReleaseMode: ShutdownWhenNoTokens,
+    })
+    start = time.Now()
+    keeper.Wait()
+    elapsed = time.Since(start).Seconds()
+
+    if elapsed >= 0.1 {
+        t.Fatalf("Expected shutdown should return immediately when no hold tokens, but took: %f seconds", elapsed)
+    }
 }
 
 func TestShutdownKeeper_MaxHoldTime(t *testing.T) {
