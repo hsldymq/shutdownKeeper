@@ -16,17 +16,33 @@ const (
 	statusShutdown
 )
 
-// HoldToken is used by subroutines to listen for shutdown events. It allows subroutines to complete their work.
+// HoldToken is used by subroutines to listen for the shutdown event. It allows subroutines to complete their work.
 // Each subroutine that holding a HoldToken should call the Release() method after it finishes its work.
 // Once all HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
-	// ListenShutdown will block the current goroutine until the shutdown stage is triggered.
+	// ListenShutdown will block the current goroutine until the shutdown event is triggered.
 	ListenShutdown()
 
 	Release()
 
 	Context() context.Context
+
+	// GoWaitAndRun is a shortcut that starts a goroutine to listen for the shutdown event, when the shutdown event is triggered, it runs the provided function. After the function execution is completed, the HoldToken will be released.
+	GoWaitAndRun(func())
+
+	// GoRun is a shortcut that starts a goroutine to run the provided function. After the function execution is completed, the HoldToken will be released.
+	GoRun(func())
 }
+
+type TokenReleaseMode int
+
+const (
+	// WaitForTriggering when this mode is set, the shutdown process will be initiated only when signals are received or when StartShutdown method is called, even all HoldTokens are released.
+	WaitForTriggering TokenReleaseMode = iota
+
+	// ShutdownWhenNoTokens when this mode is set, the shutdown process will be initiated when there are no HoldTokens allocated or when all HoldTokens are released, no matter if the shutdown process is triggered by signals or by calling StartShutdown method.
+	ShutdownWhenNoTokens
+)
 
 type ShutdownFunc func()
 
@@ -40,9 +56,9 @@ type KeeperOpts struct {
 	// If this option is provided, ShutdownKeeper will not automatically trigger the shutdown process; you need to call the ShutdownFunc function in OnSignal to initiate the shutdown process.
 	OnSignal func(os.Signal, ShutdownFunc)
 
-	// ShutdownWhenNoHoldTokens when true, ShutdownKeeper will initiate the shutdown process when there are no HoldTokens allocated or when all HoldTokens are released, no matter if the shutdown process is triggered by signals or by calling StartShutdown method.
-	// the default value is false.
-	ShutdownWhenNoHoldTokens bool
+	// TokenReleaseMode represents the behavior of ShutdownKeeper when all HoldTokens are released or when no HoldTokens are allocated.
+	// The default value is WaitForTriggering.
+	TokenReleaseMode TokenReleaseMode
 
 	// MaxHoldTime is the maximum time that ShutdownKeeper will wait for all HoldTokens to be released when shutdown process is triggered.
 	// If the time is exceeded, ShutdownKeeper.Wait() will force return.
@@ -55,10 +71,10 @@ type KeeperOpts struct {
 
 // ShutdownKeeper manages the graceful shutdown process of a program.
 type ShutdownKeeper struct {
-	status               int32
-	holdingCtx           context.Context
-	shuttingFunc         func()
-	shutdownWhenNoTokens bool
+	status           int32
+	holdingCtx       context.Context
+	shuttingFunc     func()
+	tokenReleaseMode TokenReleaseMode
 
 	signals               []os.Signal
 	signalChan            chan os.Signal
@@ -80,12 +96,17 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
 		maxHoldTime = 30 * time.Second
 	}
 
+	tokenReleaseMode := opts.TokenReleaseMode
+	if tokenReleaseMode != WaitForTriggering && tokenReleaseMode != ShutdownWhenNoTokens {
+		tokenReleaseMode = WaitForTriggering
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	keeper := &ShutdownKeeper{
-		status:               statusReady,
-		holdingCtx:           ctx,
-		shuttingFunc:         cancel,
-		shutdownWhenNoTokens: opts.ShutdownWhenNoHoldTokens,
+		status:           statusReady,
+		holdingCtx:       ctx,
+		shuttingFunc:     cancel,
+		tokenReleaseMode: tokenReleaseMode,
 
 		signals:               opts.Signals,
 		signalChan:            make(chan os.Signal, 1),
@@ -110,7 +131,7 @@ func (k *ShutdownKeeper) Wait() {
 		return
 	}
 
-	if k.getHoldingTokenNum() == 0 && k.shutdownWhenNoTokens {
+	if k.getHoldingTokenNum() == 0 && k.tokenReleaseMode == ShutdownWhenNoTokens {
 		k.StartShutdown()
 	}
 
@@ -127,6 +148,10 @@ func (k *ShutdownKeeper) Wait() {
 		}
 	}
 
+	for _, fn := range k.shutdownCallbackFuncs {
+		fn()
+	}
+
 	atomic.StoreInt32(&k.status, statusShutdown)
 }
 
@@ -138,7 +163,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 			s := atomic.LoadInt32(&k.status)
 			if s == statusWaiting || s == statusShutting {
 				k.holdTokensFinishFunc()
-				if k.shutdownWhenNoTokens {
+				if k.tokenReleaseMode == ShutdownWhenNoTokens {
 					k.StartShutdown()
 				}
 			}
@@ -149,9 +174,6 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 // StartShutdown initiates the shutdown process.
 func (k *ShutdownKeeper) StartShutdown() {
 	if atomic.CompareAndSwapInt32(&k.status, statusWaiting, statusShutting) || atomic.CompareAndSwapInt32(&k.status, statusReady, statusShutting) {
-		for _, fn := range k.shutdownCallbackFuncs {
-			fn()
-		}
 		k.shuttingFunc()
 	}
 }
@@ -212,6 +234,21 @@ func (kt *holdTokenImpl) ListenShutdown() {
 
 func (kt *holdTokenImpl) Release() {
 	kt.releasingFunc()
+}
+
+func (kt *holdTokenImpl) GoWaitAndRun(f func()) {
+	go func() {
+		defer kt.Release()
+		kt.ListenShutdown()
+		f()
+	}()
+}
+
+func (kt *holdTokenImpl) GoRun(f func()) {
+	go func() {
+		defer kt.Release()
+		f()
+	}()
 }
 
 func (kt *holdTokenImpl) Context() context.Context {
