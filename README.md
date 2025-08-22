@@ -6,118 +6,205 @@
 
 ---
 
-This package is designed to help you better control your program's shutdown process. 
+This library helps you implement graceful application shutdown by providing a coordination manager that enables bidirectional status synchronization between the program and its various sub-modules during the shutdown process. This allows modules to sense shutdown signals and perform cleanup work, while also notifying the coordination manager when they have completed their cleanup tasks. This approach maximizes the prevention of data loss and inconsistency while avoiding excessive waiting time.
 
-Its main goal is to provide you with a simple way to gracefully shut down your program.
-
-## Installation
+### Installation
 
 ```bash
-go get github.com/hsldymq/shutdownKeeper
+go get github.com/hsldymq/shutdownKeeper/v2
 ```
 
-## Example 1: Graceful shutdown of an HTTP service
-This example below demonstrates the basic usage of Shutdown Keeper for performing a graceful shutdown of an HTTP service.
+### Basic Example: Graceful HTTP Service Shutdown
 
 ```go
 package main
 
 import (
-	"context"
-	"github.com/hsldymq/shutdownKeeper"
-	"net/http"
-	"os"
-	"syscall"
-	"time"
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "syscall"
+    "time"
+
+    "github.com/hsldymq/shutdownKeeper/v2"
 )
 
+// In this application, you can press Ctrl+C or send a SIGTERM signal during API request processing to test the graceful shutdown effect. The program will wait for the API processing to complete before exiting.
 func main() {
-	// Configure the shutdownKeeper to listen for SIGINT and SIGTERM signals,
-	// and allow a maximum of 20 seconds for the service to perform a graceful shutdown
-	keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
-		Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
-		MaxHoldTime: 20 * time.Second,  // default is 30 seconds
-	})
+    // Create ShutdownKeeper, listening for SIGINT and SIGTERM signals
+    keeper := v2.NewKeeper(v2.KeeperOpts{
+        Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
+        MaxHoldTime: 60 * time.Second, // Wait at most 60 seconds during graceful shutdown
+    })
 
-	go func() {
-		server := &http.Server{
-			Addr: ":8011",
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// ...
-			}),
-		}
+    // Start HTTP service
+    server := &http.Server{
+        Addr: ":8080",
+        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Simulate time-consuming operation
+            time.Sleep(5 * time.Second)
+            w.Write([]byte("Hello, World!"))
+        }),
+    }
 
-        	// When the service receives a SIGINT or SIGTERM signal, shutdown keeper will not terminate the program immediately,
-        	// instead, it will call registered functions to do the cleanup work,  like close the HTTP server, release resources, etc.
-		keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
-		// Or you can use the following code to achieve the same effect:
-		/*
-		    go func(token shutdownKeeper.HoldToken) {
-			    // Release the HoldToken when the HTTP server is finally shut down.
-			    // Then the program will return.
-			    defer token.Release()
-			
-			    // ListenShutdown() will block until the service receives a SIGINT or SIGTERM signal.
-			    token.ListenShutdown()
+    // Use AllocHoldToken to allocate a HoldToken
+    // HoldToken plays an important role throughout the graceful shutdown process
+    // It can sense the program's shutdown signal and notify ShutdownKeeper after completing cleanup work
+    token := keeper.AllocHoldToken() 
+    go func(token v2.HoldToken) {
+        defer token.Release()   // Ensure final release of token, so ShutdownKeeper can sense that this module has completed cleanup
+        token.ListenShutdown()  // Block here until shutdown signal is received
+        
+        server.Shutdown(token.HoldingDeadlineContext())
+    }(token)
 
-			    server.Shutdown(context.Background())
-		    }(keeper.AllocHoldToken()) // HoldToken is used to listen to the shutdown event and perform a graceful shutdown.
-		 */
-		
-		_ = server.ListenAndServe()
-	}()
+    // The above code has an equivalent shortcut, namely the following code:
+    keeper.AllocHoldToken().GoWaitAndRun(func(ctx context.Context) {
+        // Executes when shutdown signal is received
+        server.Shutdown(ctx)
+    })
 
-	// Wait will block the main goroutine.
-	// When the service receives a SIGINT or SIGTERM signal, it will keep blocking until every HoldToken is released or the MaxHoldTime is reached.
-	keeper.Wait()
+    fmt.Println("HTTP service started on port 8080")
+    go server.ListenAndServe()
+
+    fmt.Println("Application started, press Ctrl+C for graceful shutdown")
+    keeper.Wait() // Block until shutdown signal is received and all cleanup work is completed, or waiting time exceeds MaxHoldTime
+    fmt.Println("Application gracefully shut down")
 }
 ```
 
-## Example 2: Shutdown by Context.Done event
-Suppose we have a long-running task, and we accept an HTTP request to shut down the task.
+## Use Cases
 
-Shutdown Keeper can also listen to the Context.Done event and perform a graceful shutdown.
+### Scenario 1: Graceful Database Operation Shutdown
+
+```go
+func runDatabaseWorker(db Database, token v2.HoldToken) {
+    defer token.Release()
+    for {
+        select {
+        case job := <-jobQueue:
+            // Process database task
+            processJob(db, job)
+        case <-token.Context().Done():
+            // Received shutdown signal, finish current transaction then exit
+            fmt.Println("Database worker received shutdown signal, finishing current transaction...")
+            finishCurrentTransaction(db)
+            fmt.Println("Database worker safely shut down")
+            db.Close()
+            return
+        }
+    }
+}
+```
+
+### Scenario 2: Graceful Message Queue Consumer Shutdown
+
+```go
+func runMessageConsuming(consumer Consumer, token v2.HoldToken) {    
+    token.GoWaitAndRun(func(ctx context.Context) {
+        defer consumer.Close()
+        
+        fmt.Println("Message consumer received shutdown signal, stopping new message reception...")
+        consumer.StopReceiving(ctx)
+        
+        // Process remaining received messages
+        consumer.ProcessRemainingMessages(ctx)
+        fmt.Println("Message consumer safely shut down")
+    })
+    consumer.StartConsuming() // Block consuming messages
+}
+```
+
+### Scenario 3: Automatic Exit After Task Completion
 
 ```go
 package main
 
 import (
-	"context"
-	"github.com/hsldymq/shutdownKeeper"
-	"net/http"
-	"time"
+    "fmt"
+    "time"
+
+    "github.com/hsldymq/shutdownKeeper/v2"
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
-		Context:     ctx,
-		MaxHoldTime: 20 * time.Second,
-	})
+    // Use ShutdownWhenNoTokens mode
+    keeper := v2.NewKeeper(v2.KeeperOpts{
+        // In this model, typically used for executing short-term tasks, when all tasks are completed, the program will automatically exit
+        TokenReleaseMode: v2.ShutdownWhenNoTokens, 
+    })
 
-	// AllocHoldToken allocates a HoldToken, the shutdown keeper tracks every tokens' status that it allocates.
-	// once shutdown process is triggered, shutdown keeper will wait for every token to be released.
-	go func(token shutdownKeeper.HoldToken) {
-		defer token.Release()
+    for i := 0; i < 5; i++ {
+        taskID := i
+        // GoRun is a shortcut method that automatically releases HoldToken after function execution completes
+        keeper.AllocHoldToken().GoRun(func() {
+            fmt.Printf("Task %d started\n", taskID)
+            time.Sleep(time.Duration(taskID+1) * time.Second)
+            fmt.Printf("Task %d completed\n", taskID)
+        })
+    }
 
-        	// RunTask is used to run a task that may block this goroutine until the context is canceled.
-        	RunTask(token.Context())
-	}(keeper.AllocHoldToken())
-
-	server := &http.Server{
-		Addr: ":8011",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == "POST" && r.URL.Path == "/shutdown" {
-                // after cancel function is called, shutdown keeper will start the graceful shutdown process.
-				cancel()
-				return
-			}
-			// ...
-		}),
-	}
-	keeper.OnShuttingDown(func() { server.Shutdown(context.Background()) })
-	go server.ListenAndServe()
-
-	keeper.Wait()
+    keeper.Wait() // Wait for all tasks to complete then automatically exit
+    fmt.Println("All tasks completed, program exiting")
 }
 ```
+
+## Additional Features
+
+### Custom Signal Handling
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "syscall"
+
+    "github.com/hsldymq/shutdownKeeper/v2"
+)
+
+func main() {
+    signalCount := 0
+    keeper := v2.NewKeeper(v2.KeeperOpts{
+        // If no OnSignal function is registered, when a signal is received, Keeper will automatically start the program exit and begin graceful shutdown process
+        Signals: []os.Signal{syscall.SIGINT},
+        // But once an OnSignal function is registered, that function should be responsible for program exit decisions, allowing you to implement special exit logic
+        // For example, in this example, the program will only exit when you press Ctrl+C 3 times
+        OnSignal: func(sig os.Signal, shutdown v2.ShutdownFunc) {
+            signalCount++
+            fmt.Printf("Received SIGINT %d times\n", signalCount)
+            if signalCount >= 3 {
+                fmt.Println("Shutting down program")
+                shutdown()
+            }
+        },
+    })
+
+    keeper.Wait()
+}
+```
+
+### Force Maximum Wait Time
+
+```go
+keeper := v2.NewKeeper(v2.KeeperOpts{
+    MaxHoldTime:       10 * time.Second,
+    AlwaysHoldMaxTime: true, // Even if all tokens are released, ensure waiting for 10 seconds before exiting
+})
+```
+
+## Frequently Asked Questions
+
+### Q: Why not use context.WithCancel directly?
+
+A: Context can only pass cancellation signals but cannot ensure that all goroutines have completed cleanup work. Shutdown Keeper ensures each sub-module has the opportunity to complete cleanup work through the HoldToken mechanism.
+
+### Q: What if a module never releases its Token?
+
+A: Set the `MaxHoldTime` parameter, and it will force exit after timeout. You can also set your own timeout logic within each module.
+
+### Q: Can Tokens be dynamically allocated at runtime?
+
+A: Yes! You can call `AllocHoldToken()` at any time, and Keeper will track all allocated tokens.
