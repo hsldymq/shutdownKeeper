@@ -6,23 +6,7 @@
 
 ---
 
-这个库用于帮助你实现程序的优雅退出,让每个子模块在程序关闭前都有机会完成手头的工作,避免数据丢失和状态不一致.
-
-## 核心概念
-
-Shutdown Keeper 通过两个核心概念解决这些问题:
-
-### ShutdownKeeper
-应用程序关闭流程的协调者, 负责:
-- 监听系统信号或其他关闭事件
-- 管理所有子模块的关闭流程
-- 确保所有模块都有足够时间完成收尾工作
-
-### HoldToken
-分配给每个子模块的"关闭令牌",子模块通过它：
-- 监听关闭事件
-- 执行收尾工作
-- 通知 Keeper 自己已完成关闭
+这个库用于帮助你实现程序的优雅退出, 通过提供一个协调管理器, 使它和程序各个子模块之间在关闭过程中能够双向同步状态,即让模块能够感知到程序的关闭信号从而进行一些收尾工作,也能够让模块能够通知协调管理器自己已经完成了收尾工作, 这样既最大限度的避免数据丢失和不一致, 也不必过度等待太长时间.
 
 ### 安装
 
@@ -30,7 +14,7 @@ Shutdown Keeper 通过两个核心概念解决这些问题:
 go get github.com/hsldymq/shutdownKeeper/v2
 ```
 
-### 基础示例：优雅关闭 HTTP 服务
+### 基础示例: 优雅关闭 HTTP 服务
 
 ```go
 package main
@@ -64,11 +48,21 @@ func main() {
         }),
     }
 
-    // GoWaitAndRun 会启动一个goroutine来监听程序的关闭事件
-    // 当收到事件后,会尽可能确保http server完成关闭后整个程序才安全退出
-    keeper.AllocHoldToken().GoWaitAndRun(func() {
+    // 使用 AllocHoldToken 分配一个 HoldToken
+    // HoldToken 在整个优雅关闭过程里扮演重要角色
+    // 它即能够感知到程序的关闭信号, 也能够在完成收尾工作后通知 ShutdownKeeper
+    token := keeper.AllocHoldToken() 
+    go func(token v2.HoldToken) {
+        defer token.Release()   // 确保最终释放 token, 这样ShutdownKeeper就能够感知到该模块已经完成了收尾工作
+        token.ListenShutdown()  // 阻塞在这里, 直到收到关闭信号
+        
+        server.Shutdown(token.HoldingDeadlineContext())
+    }(token)
+
+    // 上面的代码还有一个等价的快捷方式, 即如下代码:
+    keeper.AllocHoldToken().GoWaitAndRun(func(ctx context.Context) {
         // 当收到关闭信号时会执行
-        server.Shutdown(context.Background())
+        server.Shutdown(ctx)
     })
 
     fmt.Println("HTTP 服务启动在端口 8080")
@@ -82,11 +76,11 @@ func main() {
 
 ## 使用场景
 
-### 场景 1：数据库操作的优雅关闭
+### 场景 1: 数据库操作的优雅关闭
 
 ```go
 func runDatabaseWorker(db Database, token v2.HoldToken) {
-    defer token.Release() // 确保最终释放 token
+    defer token.Release()
     for {
         select {
         case job := <-jobQueue:
@@ -104,7 +98,7 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 }
 ```
 
-### 场景 2：消息队列消费者的优雅关闭
+### 场景 2: 消息队列消费者的优雅关闭
 
 ```go
 func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
@@ -112,13 +106,15 @@ func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
         defer token.Release()
         token.ListenShutdown()  // 阻塞监听关闭事件
         
-        defer consumer.Close()
+        ctx := token.HoldingDeadlineContext()
         
+        defer consumer.Close()
+
         fmt.Println("消息消费者收到关闭信号,停止接收新消息...")
-        consumer.StopReceiving()
+        consumer.StopReceiving(ctx)
         
         // 处理完已接收的消息
-        consumer.ProcessRemainingMessages()
+        consumer.ProcessRemainingMessages(ctx)
         fmt.Println("消息消费者已安全关闭")
     }()
     consumer.StartConsuming() // 阻塞消费消息
@@ -126,51 +122,21 @@ func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
     ///////////////////////////////////////////////////////////
     
     // 下面的代码是一个简化版本, 它使用 GoWaitAndRun 简化上面监听和释放token的逻辑
-    token.GoWaitAndRun(func() {
+    token.GoWaitAndRun(func(ctx context.Context) {
         defer consumer.Close()
+        
         fmt.Println("消息消费者收到关闭信号,停止接收新消息...")
-        consumer.StopReceiving()
+        consumer.StopReceiving(ctx)
         
         // 处理完已接收的消息
-        consumer.ProcessRemainingMessages()
+        consumer.ProcessRemainingMessages(ctx)
         fmt.Println("消息消费者已安全关闭")
     })
     consumer.StartConsuming() // 阻塞消费消息
 }
 ```
 
-### 场景 3：多个子模块协调关闭
-
-```go
-package main
-
-import (
-    "fmt"
-    "time"
-
-    "github.com/hsldymq/shutdownKeeper/v2"
-)
-
-func main() {
-    keeper := v2.NewKeeper(v2.KeeperOpts{
-        Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
-        MaxHoldTime: 60 * time.Second,
-    })
-
-    // 启动多个子模块, 为每个模块都分配一个 HoldToken, 让它们都有机会完成收尾工作
-    go runHTTPServer(keeper.AllocHoldToken())
-    go runDatabaseWorker(keeper.AllocHoldToken())
-    go runMessageConsumer(keeper.AllocHoldToken())
-    go runFileUploader(keeper.AllocHoldToken())
-    go runCacheManager(keeper.AllocHoldToken())
-
-    fmt.Println("所有服务已启动")
-    keeper.Wait() // 等待所有子模块完成关闭
-    fmt.Println("所有服务已优雅关闭")
-}
-```
-
-### 场景 4：任务完成后自动退出
+### 场景 4: 任务完成后自动退出
 
 ```go
 package main
@@ -185,13 +151,13 @@ import (
 func main() {
     // 使用 ShutdownWhenNoTokens 模式
     keeper := v2.NewKeeper(v2.KeeperOpts{
-        TokenReleaseMode: v2.ShutdownWhenNoTokens, // 当所有 token 释放后自动关闭
+        // 在这种模型下, 通常用于执行一些短期任务, 当所有任务执行完成后, 程序就会自动退出
+        TokenReleaseMode: v2.ShutdownWhenNoTokens, 
     })
 
-    // 启动一些临时任务
     for i := 0; i < 5; i++ {
         taskID := i
-        // GoRun 是一个快捷方式, 它会在函数执行完成后自动释放HoldToken
+        // GoRun 是一个快捷方法, 它会在函数执行完成后自动释放HoldToken
         keeper.AllocHoldToken().GoRun(func() {
             fmt.Printf("任务 %d 开始执行\n", taskID)
             time.Sleep(time.Duration(taskID+1) * time.Second)
@@ -224,13 +190,13 @@ func main() {
     keeper := v2.NewKeeper(v2.KeeperOpts{
         // 如果没有注册 OnSignal 函数, 当收到信号时, Keeper 会自动启动退出程序开始优雅关闭流程
         Signals: []os.Signal{syscall.SIGINT},
-        // 但如果注册了 OnSignal 函数, 那么该函数就应该负责程序退出的决策, 这样你可以实现一些特殊的退出逻辑
+        // 但一旦注册了 OnSignal 函数, 那么该函数就应该负责程序退出的决策, 这样你可以实现一些特殊的退出逻辑
         // 比如在这个例子中, 只有当你按下3次 Ctrl+C 时才会退出程序
         OnSignal: func(sig os.Signal, shutdown v2.ShutdownFunc) {
             signalCount++
             fmt.Printf("收到 SIGINT %d次\n", signalCount)
             if signalCount >= 3 {
-                fmt.Println("开始关闭")
+                fmt.Println("关闭程序")
                 shutdown()
             }
         },
