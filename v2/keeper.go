@@ -95,8 +95,6 @@ type ShutdownKeeper struct {
     holdTokensFinishFunc    func()
     maxHoldTime             time.Duration
     alwaysHoldMaxTime       bool
-
-    shutdownCallbackFuncs []func()
 }
 
 func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
@@ -166,10 +164,6 @@ func (k *ShutdownKeeper) Wait() {
         }
     }
 
-    for _, fn := range k.shutdownCallbackFuncs {
-        fn()
-    }
-
     if reachMaxHoldTime {
         // add a small delay for the cleanup
         time.Sleep(50 * time.Millisecond)
@@ -198,16 +192,6 @@ func (k *ShutdownKeeper) StartShutdown() {
     if atomic.CompareAndSwapInt32(&k.status, statusWaiting, statusShutting) || atomic.CompareAndSwapInt32(&k.status, statusReady, statusShutting) {
         k.shuttingFunc()
     }
-}
-
-// OnShuttingDown registers a function to be called when the shutdown process is triggered.
-func (k *ShutdownKeeper) OnShuttingDown(f func()) {
-    s := atomic.LoadInt32(&k.status)
-    if s != statusReady && s != statusWaiting {
-        return
-    }
-
-    k.shutdownCallbackFuncs = append(k.shutdownCallbackFuncs, f)
 }
 
 func (k *ShutdownKeeper) listenSignals() {
