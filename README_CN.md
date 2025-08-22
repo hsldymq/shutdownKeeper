@@ -102,26 +102,6 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 
 ```go
 func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
-    go func() {
-        defer token.Release()
-        token.ListenShutdown()  // 阻塞监听关闭事件
-        
-        ctx := token.HoldingDeadlineContext()
-        
-        defer consumer.Close()
-
-        fmt.Println("消息消费者收到关闭信号,停止接收新消息...")
-        consumer.StopReceiving(ctx)
-        
-        // 处理完已接收的消息
-        consumer.ProcessRemainingMessages(ctx)
-        fmt.Println("消息消费者已安全关闭")
-    }()
-    consumer.StartConsuming() // 阻塞消费消息
-    
-    ///////////////////////////////////////////////////////////
-    
-    // 下面的代码是一个简化版本, 它使用 GoWaitAndRun 简化上面监听和释放token的逻辑
     token.GoWaitAndRun(func(ctx context.Context) {
         defer consumer.Close()
         
@@ -136,7 +116,7 @@ func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
 }
 ```
 
-### 场景 4: 任务完成后自动退出
+### 场景 3: 任务完成后自动退出
 
 ```go
 package main
