@@ -6,6 +6,8 @@
 
 ---
 
+[中文](./README_CN.md)
+
 This library helps you implement graceful application shutdown by providing a coordination manager that enables bidirectional status synchronization between the program and its various sub-modules during the shutdown process. This allows modules to sense shutdown signals and perform cleanup work, while also notifying the coordination manager when they have completed their cleanup tasks. This approach maximizes the prevention of data loss and inconsistency while avoiding excessive waiting time.
 
 ### Installation
