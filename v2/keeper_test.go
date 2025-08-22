@@ -170,12 +170,16 @@ func TestShutdownKeeper_CleanupTaskReachHoldingDeadline(t *testing.T) {
     })
 
     elapsedChan := make(chan float64)
-    keeper.AllocHoldToken().GoListenThenDo(func(ctx context.Context) {
+    token := keeper.AllocHoldToken()
+    go func(token HoldToken) {
+        defer token.Release()
+        token.ListenShutdown()
+
         start := time.Now()
-        <-ctx.Done()
+        <-token.HoldingDeadlineContext().Done()
         elapsed := time.Since(start).Seconds()
         elapsedChan <- elapsed
-    })
+    }(token)
 
     keeper.signalChan <- syscall.SIGINT
     keeper.Wait()
