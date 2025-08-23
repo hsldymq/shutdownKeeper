@@ -23,18 +23,18 @@ type HoldToken interface {
     // ListenShutdown will block the current goroutine until the shutdown event is triggered.
     ListenShutdown()
 
-    // ListeningContext is the context that will be canceled when the shutdown event is triggered, for example, when a signal is received or when the StartShutdown method is called.
+    // Context is the context that will be canceled when the shutdown event is triggered, for example, when a signal is received or when the StartShutdown method is called.
     // this context is the one that ListenShutdown method blocks on.
-    ListeningContext() context.Context
+    Context() context.Context
 
     // Release should always be called after the subroutine finishes its work.
     Release()
 
-    // HoldingDeadlineContext is the context that will be canceled when the MaxHoldTime is exceeded during the shutdown process.
-    HoldingDeadlineContext() context.Context
+    // DeadlineContext is the context that will be canceled when the MaxHoldTime is exceeded during the shutdown process.
+    DeadlineContext() context.Context
 
     // GoListenThenDo is a shortcut that starts a goroutine to listen for the shutdown event, when the shutdown event is triggered, it runs the provided function. After the function execution is completed, the HoldToken will be released.
-    // the context that is passed to the function is the one returned by HoldingDeadlineContext method.
+    // the context that is passed to the function is the one returned by DeadlineContext method.
     GoListenThenDo(func(ctx context.Context))
 
     // GoRun is a shortcut that starts a goroutine and run the provided function immediately. After the function execution is completed, the HoldToken will be released.
@@ -78,12 +78,12 @@ type KeeperOpts struct {
 
 // ShutdownKeeper manages the graceful shutdown process of a program.
 type ShutdownKeeper struct {
-    status                int32
-    listeningCtx          context.Context
-    shuttingFunc          func()
-    tokenReleaseMode      TokenReleaseMode
-    holdingDeadlineCtx    context.Context
-    holdingDeadlineCancel func()
+    status           int32
+    listeningCtx     context.Context
+    shuttingFunc     func()
+    tokenReleaseMode TokenReleaseMode
+    deadlineCtx      context.Context
+    deadlineCancel   func()
 
     signals               []os.Signal
     signalChan            chan os.Signal
@@ -109,14 +109,14 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
     }
 
     listeningCtx, listeningCancel := context.WithCancel(context.Background())
-    holdingDeadlineCtx, deadlineCancel := context.WithCancel(context.Background())
+    deadlineCtx, deadlineCancel := context.WithCancel(context.Background())
     keeper := &ShutdownKeeper{
-        status:                statusReady,
-        listeningCtx:          listeningCtx,
-        shuttingFunc:          listeningCancel,
-        tokenReleaseMode:      tokenReleaseMode,
-        holdingDeadlineCtx:    holdingDeadlineCtx,
-        holdingDeadlineCancel: sync.OnceFunc(deadlineCancel),
+        status:           statusReady,
+        listeningCtx:     listeningCtx,
+        shuttingFunc:     listeningCancel,
+        tokenReleaseMode: tokenReleaseMode,
+        deadlineCtx:      deadlineCtx,
+        deadlineCancel:   sync.OnceFunc(deadlineCancel),
 
         signals:               opts.Signals,
         signalChan:            make(chan os.Signal, 1),
@@ -153,16 +153,14 @@ func (k *ShutdownKeeper) Wait() {
     if k.alwaysHoldMaxTime {
         <-time.After(k.maxHoldTime)
         reachMaxHoldTime = true
-        k.holdingDeadlineCancel()
     } else if k.getHoldingTokenNum() > 0 {
         select {
         case <-time.After(k.maxHoldTime):
             reachMaxHoldTime = true
-            k.holdingDeadlineCancel()
         case <-k.holdTokenFinishNotifier:
-            defer k.holdingDeadlineCancel()
         }
     }
+    k.deadlineCancel()
 
     if reachMaxHoldTime {
         // add a small delay for the cleanup
@@ -174,7 +172,7 @@ func (k *ShutdownKeeper) Wait() {
 // AllocHoldToken allocates a HoldToken.
 func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
     atomic.AddInt32(&k.holdTokenNum, 1)
-    return newHoldTokenImpl(k.listeningCtx, k.holdingDeadlineCtx, sync.OnceFunc(func() {
+    return newHoldTokenImpl(k.listeningCtx, k.deadlineCtx, sync.OnceFunc(func() {
         if atomic.AddInt32(&k.holdTokenNum, -1) == 0 {
             s := atomic.LoadInt32(&k.status)
             if s == statusWaiting || s == statusShutting {
@@ -223,24 +221,24 @@ func (k *ShutdownKeeper) getHoldingTokenNum() int32 {
 }
 
 type holdTokenImpl struct {
-    listeningCtx       context.Context
-    holdingDeadlineCtx context.Context
-    releasingFunc      func()
+    listeningCtx  context.Context
+    deadlineCtx   context.Context
+    releasingFunc func()
 }
 
-func newHoldTokenImpl(listeningCtx context.Context, holdingDeadlineCtx context.Context, releasingFunc func()) *holdTokenImpl {
+func newHoldTokenImpl(listeningCtx context.Context, deadlineCtx context.Context, releasingFunc func()) *holdTokenImpl {
     return &holdTokenImpl{
-        listeningCtx:       listeningCtx,
-        holdingDeadlineCtx: holdingDeadlineCtx,
-        releasingFunc:      releasingFunc,
+        listeningCtx:  listeningCtx,
+        deadlineCtx:   deadlineCtx,
+        releasingFunc: releasingFunc,
     }
 }
 
 func (kt *holdTokenImpl) ListenShutdown() {
-    <-kt.ListeningContext().Done()
+    <-kt.Context().Done()
 }
 
-func (kt *holdTokenImpl) ListeningContext() context.Context {
+func (kt *holdTokenImpl) Context() context.Context {
     return kt.listeningCtx
 }
 
@@ -248,15 +246,15 @@ func (kt *holdTokenImpl) Release() {
     kt.releasingFunc()
 }
 
-func (kt *holdTokenImpl) HoldingDeadlineContext() context.Context {
-    return kt.holdingDeadlineCtx
+func (kt *holdTokenImpl) DeadlineContext() context.Context {
+    return kt.deadlineCtx
 }
 
-func (kt *holdTokenImpl) GoListenThenDo(f func(ctx context.Context)) {
+func (kt *holdTokenImpl) GoListenThenDo(f func(deadlineCtx context.Context)) {
     go func() {
         defer kt.Release()
         kt.ListenShutdown()
-        f(kt.holdingDeadlineCtx)
+        f(kt.deadlineCtx)
     }()
 }
 
