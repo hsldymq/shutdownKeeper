@@ -37,7 +37,7 @@ import (
 // In this application, you can press Ctrl+C or send a SIGTERM signal during API request processing to test the graceful shutdown effect. The program will wait for the API processing to complete before exiting.
 func main() {
     // Create ShutdownKeeper, listening for SIGINT and SIGTERM signals
-    keeper := v2.NewKeeper(v2.KeeperOpts{
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
         Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
         MaxHoldTime: 60 * time.Second, // Wait at most 60 seconds during graceful shutdown
     })
@@ -56,15 +56,15 @@ func main() {
     // HoldToken plays an important role throughout the graceful shutdown process
     // It can sense the program's shutdown signal and notify ShutdownKeeper after completing cleanup work
     token := keeper.AllocHoldToken() 
-    go func(token v2.HoldToken) {
+    go func(token shutdownKeeper.HoldToken) {
         defer token.Release()   // Ensure final release of token, so ShutdownKeeper can sense that this module has completed cleanup
         token.ListenShutdown()  // Block here until shutdown signal is received
         
-        server.Shutdown(token.HoldingDeadlineContext())
+        server.Shutdown(token.DeadlineContext())
     }(token)
 
     // The above code has an equivalent shortcut, namely the following code:
-    keeper.AllocHoldToken().GoWaitAndRun(func(deadlineCtx context.Context) {
+    keeper.AllocHoldToken().GoListenThenDo(func(deadlineCtx context.Context) {
         // Executes when shutdown signal is received
         server.Shutdown(deadlineCtx)
     })
@@ -83,7 +83,7 @@ func main() {
 ### Scenario 1: Graceful Database Operation Shutdown
 
 ```go
-func runDatabaseWorker(db Database, token v2.HoldToken) {
+func runDatabaseWorker(db Database, token shutdownKeeper.HoldToken) {
     defer token.Release()
     for {
         select {
@@ -105,8 +105,8 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 ### Scenario 2: Graceful Message Queue Consumer Shutdown
 
 ```go
-func runMessageConsuming(consumer Consumer, token v2.HoldToken) {    
-    token.GoWaitAndRun(func(deadlineCtx context.Context) {
+func runMessageConsuming(consumer Consumer, token shutdownKeeper.HoldToken) {    
+    token.GoListenThenDo(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("Message consumer received shutdown signal, stopping new message reception...")
@@ -134,19 +134,20 @@ import (
 
 func main() {
     // Use ShutdownWhenNoTokens mode
-    keeper := v2.NewKeeper(v2.KeeperOpts{
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
         // In this model, typically used for executing short-term tasks, when all tasks are completed, the program will automatically exit
-        TokenReleaseMode: v2.ShutdownWhenNoTokens, 
+        TokenReleaseMode: shutdownKeeper.ShutdownWhenNoTokens, 
     })
 
     for i := 0; i < 5; i++ {
-        taskID := i
         // GoRun is a shortcut method that automatically releases HoldToken after function execution completes
         keeper.AllocHoldToken().GoRun(func() {
-            fmt.Printf("Task %d started\n", taskID)
-            time.Sleep(time.Duration(taskID+1) * time.Second)
-            fmt.Printf("Task %d completed\n", taskID)
+            fmt.Printf("Task %d started\n", i+1)
+            time.Sleep(time.Duration(i+1) * time.Second)
+            fmt.Printf("Task %d completed\n", i+1)
         })
+
+        // Additionally, GoRun also has a version with a context parameter called GoRunWithCtx. You can use the context to sense shutdown events, giving you the opportunity to interrupt task execution.
     }
 
     keeper.Wait() // Wait for all tasks to complete then automatically exit
@@ -171,12 +172,12 @@ import (
 
 func main() {
     signalCount := 0
-    keeper := v2.NewKeeper(v2.KeeperOpts{
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
         // If no OnSignal function is registered, when a signal is received, Keeper will automatically start the program exit and begin graceful shutdown process
         Signals: []os.Signal{syscall.SIGINT},
         // But once an OnSignal function is registered, that function should be responsible for program exit decisions, allowing you to implement special exit logic
         // For example, in this example, the program will only exit when you press Ctrl+C 3 times
-        OnSignal: func(sig os.Signal, shutdown v2.ShutdownFunc) {
+        OnSignal: func(sig os.Signal, shutdown shutdownKeeper.ShutdownFunc) {
             signalCount++
             fmt.Printf("Received SIGINT %d times\n", signalCount)
             if signalCount >= 3 {
@@ -193,7 +194,7 @@ func main() {
 ### Force Maximum Wait Time
 
 ```go
-keeper := v2.NewKeeper(v2.KeeperOpts{
+keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
     MaxHoldTime:       10 * time.Second,
     AlwaysHoldMaxTime: true, // Even if all tokens are released, ensure waiting for 10 seconds before exiting
 })

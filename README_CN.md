@@ -35,7 +35,7 @@ import (
 // 在这个应用中, 你可以在请求接口的过程中按下 Ctrl+C 或发送 SIGTERM 信号来测试优雅关闭的效果, 程序会等待接口处理完成后再退出.
 func main() {
     // 创建 ShutdownKeeper,监听 SIGINT 和 SIGTERM 信号
-    keeper := v2.NewKeeper(v2.KeeperOpts{
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
         Signals:     []os.Signal{syscall.SIGINT, syscall.SIGTERM},
         MaxHoldTime: 60 * time.Second, // 优雅退出过程最多等待 60 秒
     })
@@ -54,15 +54,15 @@ func main() {
     // HoldToken 在整个优雅关闭过程里扮演重要角色
     // 它即能够感知到程序的关闭信号, 也能够在完成收尾工作后通知 ShutdownKeeper
     token := keeper.AllocHoldToken() 
-    go func(token v2.HoldToken) {
+    go func(token shutdownKeeper.HoldToken) {
         defer token.Release()   // 确保最终释放 token, 这样ShutdownKeeper就能够感知到该模块已经完成了收尾工作
         token.ListenShutdown()  // 阻塞在这里, 直到收到关闭信号
         
-        server.Shutdown(token.HoldingDeadlineContext())
+        server.Shutdown(token.DeadlineContext())
     }(token)
 
     // 上面的代码还有一个等价的快捷方式, 即如下代码:
-    keeper.AllocHoldToken().GoWaitAndRun(func(deadlineCtx context.Context) {
+    keeper.AllocHoldToken().GoListenThenDo(func(deadlineCtx context.Context) {
         // 当收到关闭信号时会执行
         server.Shutdown(deadlineCtx)
     })
@@ -81,7 +81,7 @@ func main() {
 ### 场景 1: 数据库操作的优雅关闭
 
 ```go
-func runDatabaseWorker(db Database, token v2.HoldToken) {
+func runDatabaseWorker(db Database, token shutdownKeeper.HoldToken) {
     defer token.Release()
     for {
         select {
@@ -103,8 +103,8 @@ func runDatabaseWorker(db Database, token v2.HoldToken) {
 ### 场景 2: 消息队列消费者的优雅关闭
 
 ```go
-func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
-    token.GoWaitAndRun(func(deadlineCtx context.Context) {
+func runMessageConsuming(consumer Consumer, token shutdownKeeper.HoldToken) {
+    token.GoListenThenDo(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("消息消费者收到关闭信号,停止接收新消息...")
@@ -124,27 +124,30 @@ func runMessageConsuming(consumer Consumer, token v2.HoldToken) {
 package main
 
 import (
+    "context"
     "fmt"
     "time"
+    "os"
+    "syscall"
 
     "github.com/hsldymq/shutdownKeeper/v2"
 )
 
 func main() {
-    // 使用 ShutdownWhenNoTokens 模式
-    keeper := v2.NewKeeper(v2.KeeperOpts{
-        // 在这种模型下, 通常用于执行一些短期任务, 当所有任务执行完成后, 程序就会自动退出
-        TokenReleaseMode: v2.ShutdownWhenNoTokens, 
+    // 使用 ShutdownWhenNoTokens 模式, 在这种模型下, 通常用于执行一些短期任务, 当所有任务执行完成后, 程序就会自动退出 
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
+        TokenReleaseMode: shutdownKeeper.ShutdownWhenNoTokens,
     })
 
     for i := 0; i < 5; i++ {
-        taskID := i
         // GoRun 是一个快捷方法, 它会在函数执行完成后自动释放HoldToken
         keeper.AllocHoldToken().GoRun(func() {
-            fmt.Printf("任务 %d 开始执行\n", taskID)
-            time.Sleep(time.Duration(taskID+1) * time.Second)
-            fmt.Printf("任务 %d 执行完成\n", taskID)
+            fmt.Printf("任务 %d 开始执行\n", i+1)
+            time.Sleep(time.Duration(i+1) * time.Second)
+            fmt.Printf("任务 %d 执行完成\n", i+1)
         })
+        
+        // 另外, GoRun 还有一个携带 context 参数的版本 GoRunWithCtx, 你可以通过 context 来感知关闭事件, 这样有机会打断任务的执行
     }
 
     keeper.Wait() // 等待所有任务完成后自动退出
@@ -169,12 +172,12 @@ import (
 
 func main() {
     signalCount := 0
-    keeper := v2.NewKeeper(v2.KeeperOpts{
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
         // 如果没有注册 OnSignal 函数, 当收到信号时, Keeper 会自动启动退出程序开始优雅关闭流程
         Signals: []os.Signal{syscall.SIGINT},
         // 但一旦注册了 OnSignal 函数, 那么该函数就应该负责程序退出的决策, 这样你可以实现一些特殊的退出逻辑
         // 比如在这个例子中, 只有当你按下3次 Ctrl+C 时才会退出程序
-        OnSignal: func(sig os.Signal, shutdown v2.ShutdownFunc) {
+        OnSignal: func(sig os.Signal, shutdown shutdownKeeper.ShutdownFunc) {
             signalCount++
             fmt.Printf("收到 SIGINT %d次\n", signalCount)
             if signalCount >= 3 {
@@ -191,7 +194,7 @@ func main() {
 ### 强制等待最大时间
 
 ```go
-keeper := v2.NewKeeper(v2.KeeperOpts{
+keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
     MaxHoldTime:       10 * time.Second,
     AlwaysHoldMaxTime: true, // 即使所有 token 都释放了,也要保证等待 10 秒后再退出
 })
