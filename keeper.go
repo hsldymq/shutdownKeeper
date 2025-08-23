@@ -39,6 +39,9 @@ type HoldToken interface {
 
     // GoRun is a shortcut that starts a goroutine and run the provided function immediately. After the function execution is completed, the HoldToken will be released.
     GoRun(func())
+
+    // GoRunWithCtx is similar to GoRun, but it passes the context returned by Context method to the function.
+    GoRunWithCtx(f func(ctx context.Context))
 }
 
 type TokenReleaseMode int
@@ -262,5 +265,12 @@ func (kt *holdTokenImpl) GoRun(f func()) {
     go func() {
         defer kt.Release()
         f()
+    }()
+}
+
+func (kt *holdTokenImpl) GoRunWithCtx(f func(ctx context.Context)) {
+    go func() {
+        defer kt.Release()
+        f(kt.listeningCtx)
     }()
 }
