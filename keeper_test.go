@@ -104,7 +104,7 @@ func TestShutdownKeeper_ShutdownWhenAllHoldTokensReleased(t *testing.T) {
         atomic.AddInt32(&actual, 1)
     })
 
-    keeper.AllocHoldToken().GoRun(func() {
+    keeper.AllocHoldToken().GoRunWithCtx(func(_ context.Context) {
         time.Sleep(500 * time.Millisecond)
         atomic.AddInt32(&actual, 1)
     })
@@ -188,7 +188,7 @@ func TestShutdownKeeper_CleanupTaskReachHoldingDeadline(t *testing.T) {
         token.ListenShutdown()
 
         start := time.Now()
-        <-token.HoldingDeadlineContext().Done()
+        <-token.DeadlineContext().Done()
         elapsed := time.Since(start).Seconds()
         elapsedChan <- elapsed
     }(token)
