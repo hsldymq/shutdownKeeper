@@ -150,7 +150,7 @@ func (k *ShutdownKeeper) Wait() {
 
     go k.listenSignals()
     defer close(k.signalReleaseNotifier)
-    <-k.listeningCtx.Done()
+    <-k.Context().Done()
 
     reachMaxHoldTime := false
     if k.alwaysHoldMaxTime {
@@ -175,7 +175,7 @@ func (k *ShutdownKeeper) Wait() {
 // AllocHoldToken allocates a HoldToken.
 func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
     atomic.AddInt32(&k.holdTokenNum, 1)
-    return newHoldTokenImpl(k.listeningCtx, k.deadlineCtx, sync.OnceFunc(func() {
+    return newHoldTokenImpl(k.Context(), k.DeadlineContext(), sync.OnceFunc(func() {
         if atomic.AddInt32(&k.holdTokenNum, -1) == 0 {
             s := atomic.LoadInt32(&k.status)
             if s == statusWaiting || s == statusShutting {
