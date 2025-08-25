@@ -237,6 +237,9 @@ type holdTokenImpl struct {
     listeningCtx  context.Context
     deadlineCtx   context.Context
     releasingFunc func()
+
+    shuttingFuncCount int32
+    runningFuncCount  int32
 }
 
 func newHoldTokenImpl(listeningCtx context.Context, deadlineCtx context.Context, releasingFunc func()) *holdTokenImpl {
@@ -244,6 +247,9 @@ func newHoldTokenImpl(listeningCtx context.Context, deadlineCtx context.Context,
         listeningCtx:  listeningCtx,
         deadlineCtx:   deadlineCtx,
         releasingFunc: releasingFunc,
+
+        shuttingFuncCount: 0,
+        runningFuncCount:  0,
     }
 }
 
@@ -264,23 +270,38 @@ func (kt *holdTokenImpl) DeadlineContext() context.Context {
 }
 
 func (kt *holdTokenImpl) DoOnShutdown(f func(deadlineCtx context.Context)) {
+    atomic.AddInt32(&kt.shuttingFuncCount, 1)
     go func() {
-        defer kt.Release()
+        defer func() {
+            if atomic.AddInt32(&kt.shuttingFuncCount, -1) == 0 {
+                kt.Release()
+            }
+        }()
         kt.ListenShutdown()
         f(kt.deadlineCtx)
     }()
 }
 
 func (kt *holdTokenImpl) GoRun(f func()) {
+    atomic.AddInt32(&kt.runningFuncCount, 1)
     go func() {
-        defer kt.Release()
+        defer func() {
+            if atomic.AddInt32(&kt.runningFuncCount, -1) == 0 {
+                kt.Release()
+            }
+        }()
         f()
     }()
 }
 
 func (kt *holdTokenImpl) GoRunWithCtx(f func(ctx context.Context)) {
+    atomic.AddInt32(&kt.runningFuncCount, 1)
     go func() {
-        defer kt.Release()
+        defer func() {
+            if atomic.AddInt32(&kt.runningFuncCount, -1) == 0 {
+                kt.Release()
+            }
+        }()
         f(kt.listeningCtx)
     }()
 }
