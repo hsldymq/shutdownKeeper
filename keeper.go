@@ -195,6 +195,16 @@ func (k *ShutdownKeeper) StartShutdown() {
     }
 }
 
+// Context returns the context that will be canceled when the shutdown process is initiated.
+func (k *ShutdownKeeper) Context() context.Context {
+    return k.listeningCtx
+}
+
+// DeadlineContext returns the context that will be canceled when the MaxHoldTime is exceeded or all HoldTokens are released during the shutdown process.
+func (k *ShutdownKeeper) DeadlineContext() context.Context {
+    return k.deadlineCtx
+}
+
 func (k *ShutdownKeeper) listenSignals() {
     if len(k.signals) == 0 {
         return
