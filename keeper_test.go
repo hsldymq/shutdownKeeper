@@ -64,12 +64,12 @@ func TestShutdownKeeper_HoldTokens(t *testing.T) {
 
     start := time.Now()
     var actual int32
-    keeper.AllocHoldToken().GoListenThenDo(func(_ context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
         time.Sleep(time.Second)
         atomic.AddInt32(&actual, 1)
     })
 
-    keeper.AllocHoldToken().GoListenThenDo(func(_ context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
         time.Sleep(500 * time.Millisecond)
         atomic.AddInt32(&actual, 1)
     })
@@ -140,7 +140,7 @@ func TestShutdownKeeper_MaxHoldTime(t *testing.T) {
     })
 
     start := time.Now()
-    keeper.AllocHoldToken().GoListenThenDo(func(_ context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
         time.Sleep(5 * time.Second)
     })
 
@@ -162,7 +162,7 @@ func TestShutdownKeeper_AlwaysHoldMaxTime(t *testing.T) {
     })
 
     start := time.Now()
-    keeper.AllocHoldToken().GoListenThenDo(func(_ context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
         time.Sleep(500 * time.Millisecond)
     })
     keeper.signalChan <- syscall.SIGINT

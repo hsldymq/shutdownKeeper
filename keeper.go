@@ -33,9 +33,9 @@ type HoldToken interface {
     // DeadlineContext is the context that will be canceled when the MaxHoldTime is exceeded during the shutdown process.
     DeadlineContext() context.Context
 
-    // GoListenThenDo is a shortcut that starts a goroutine to listen for the shutdown event, when the shutdown event is triggered, it runs the provided function. After the function execution is completed, the HoldToken will be released.
+    // DoOnShutdown is a shortcut that starts a goroutine to listen for the shutdown event, when the shutdown event is triggered, it runs the provided function. After the function execution is completed, the HoldToken will be released.
     // the context that is passed to the function is the one returned by DeadlineContext method.
-    GoListenThenDo(func(ctx context.Context))
+    DoOnShutdown(func(ctx context.Context))
 
     // GoRun is a shortcut that starts a goroutine and run the provided function immediately. After the function execution is completed, the HoldToken will be released.
     GoRun(func())
@@ -83,7 +83,7 @@ type KeeperOpts struct {
 type ShutdownKeeper struct {
     status           int32
     listeningCtx     context.Context
-    shuttingFunc     func()
+    shutdownFunc     func()
     tokenReleaseMode TokenReleaseMode
     deadlineCtx      context.Context
     deadlineCancel   func()
@@ -116,7 +116,7 @@ func NewKeeper(opts KeeperOpts) *ShutdownKeeper {
     keeper := &ShutdownKeeper{
         status:           statusReady,
         listeningCtx:     listeningCtx,
-        shuttingFunc:     listeningCancel,
+        shutdownFunc:     listeningCancel,
         tokenReleaseMode: tokenReleaseMode,
         deadlineCtx:      deadlineCtx,
         deadlineCancel:   sync.OnceFunc(deadlineCancel),
@@ -191,7 +191,7 @@ func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
 // StartShutdown initiates the shutdown process.
 func (k *ShutdownKeeper) StartShutdown() {
     if atomic.CompareAndSwapInt32(&k.status, statusWaiting, statusShutting) || atomic.CompareAndSwapInt32(&k.status, statusReady, statusShutting) {
-        k.shuttingFunc()
+        k.shutdownFunc()
     }
 }
 
@@ -263,7 +263,7 @@ func (kt *holdTokenImpl) DeadlineContext() context.Context {
     return kt.deadlineCtx
 }
 
-func (kt *holdTokenImpl) GoListenThenDo(f func(deadlineCtx context.Context)) {
+func (kt *holdTokenImpl) DoOnShutdown(f func(deadlineCtx context.Context)) {
     go func() {
         defer kt.Release()
         kt.ListenShutdown()
