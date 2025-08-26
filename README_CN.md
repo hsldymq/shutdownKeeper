@@ -62,7 +62,7 @@ func main() {
     }(token)
 
     // 上面的代码还有一个等价的快捷方式, 即如下代码:
-    keeper.AllocHoldToken().GoListenThenDo(func(deadlineCtx context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(deadlineCtx context.Context) {
         // 当收到关闭信号时会执行
         server.Shutdown(deadlineCtx)
     })
@@ -104,7 +104,7 @@ func runDatabaseWorker(db Database, token shutdownKeeper.HoldToken) {
 
 ```go
 func runMessageConsuming(consumer Consumer, token shutdownKeeper.HoldToken) {
-    token.GoListenThenDo(func(deadlineCtx context.Context) {
+    token.DoOnShutdown(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("消息消费者收到关闭信号,停止接收新消息...")

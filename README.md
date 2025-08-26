@@ -64,7 +64,7 @@ func main() {
     }(token)
 
     // The above code has an equivalent shortcut, namely the following code:
-    keeper.AllocHoldToken().GoListenThenDo(func(deadlineCtx context.Context) {
+    keeper.AllocHoldToken().DoOnShutdown(func(deadlineCtx context.Context) {
         // Executes when shutdown signal is received
         server.Shutdown(deadlineCtx)
     })
@@ -106,7 +106,7 @@ func runDatabaseWorker(db Database, token shutdownKeeper.HoldToken) {
 
 ```go
 func runMessageConsuming(consumer Consumer, token shutdownKeeper.HoldToken) {    
-    token.GoListenThenDo(func(deadlineCtx context.Context) {
+    token.DoOnShutdown(func(deadlineCtx context.Context) {
         defer consumer.Close()
         
         fmt.Println("Message consumer received shutdown signal, stopping new message reception...")
