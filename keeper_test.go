@@ -3,6 +3,7 @@ package shutdownKeeper
 import (
     "context"
     "os"
+    "sync"
     "sync/atomic"
     "syscall"
     "testing"
@@ -223,5 +224,129 @@ func TestShutdownKeeper_WaitMultipleTimes(t *testing.T) {
 
     if elapsed > 0.01 {
         t.Fatalf("Expected second Wait to return immediately, but it took: %f seconds", elapsed)
+    }
+}
+
+func TestHoldToken_ChainToken(t *testing.T) {
+    keeper := NewKeeper(KeeperOpts{
+        Signals: []os.Signal{syscall.SIGINT},
+    })
+
+    var executionOrder []int
+    l := &sync.Mutex{}
+    addToOrder := func(order int) {
+        l.Lock()
+        defer l.Unlock()
+        executionOrder = append(executionOrder, order)
+    }
+
+    parentToken := keeper.AllocHoldToken()
+    chainedToken := parentToken.AllocChainedToken()
+
+    // Set up parent token to do some work then release
+    parentToken.DoOnShutdown(func(ctx context.Context) {
+        addToOrder(1)
+        time.Sleep(200 * time.Millisecond) // Simulate work
+        addToOrder(2)
+        // parentToken will be released automatically after this function
+    })
+
+    // Set up chained token to wait for parent release
+    chainedToken.DoOnShutdown(func(ctx context.Context) {
+        addToOrder(3)
+        time.Sleep(100 * time.Millisecond) // Simulate work
+        addToOrder(4)
+    })
+
+    go func() {
+        // Start shutdown process after a short delay
+        time.Sleep(100 * time.Millisecond)
+        keeper.StartShutdown()
+    }()
+
+    start := time.Now()
+    keeper.Wait()
+    elapsed := time.Since(start).Seconds()
+
+    expectedOrder := []int{1, 2, 3, 4}
+    if len(executionOrder) != len(expectedOrder) {
+        t.Fatalf("Expected execution order length %d, got %d. Order: %v", len(expectedOrder), len(executionOrder), executionOrder)
+    }
+
+    for i, expected := range expectedOrder {
+        if executionOrder[i] != expected {
+            t.Fatalf("Expected execution order %v, got %v", expectedOrder, executionOrder)
+        }
+    }
+
+    // Total time should be at least 400ms (100ms shutdown delay + 200ms parent + 100ms chained)
+    if elapsed < 0.4 || elapsed >= 0.410 {
+        t.Fatalf("Expected total execution time to be at least 400ms and less than 410ms, got: %f seconds", elapsed)
+    }
+}
+
+func TestHoldToken_ChainToken_MultipleChains(t *testing.T) {
+    keeper := NewKeeper(KeeperOpts{
+        TokenReleaseMode: ShutdownWhenNoTokens,
+    })
+
+    var executionOrder []int
+    l := &sync.Mutex{}
+    addToOrder := func(order int) {
+        l.Lock()
+        defer l.Unlock()
+        executionOrder = append(executionOrder, order)
+    }
+
+    // Create a chain: parent -> chainedA1 & chainedA2 -> chainedB
+    parent := keeper.AllocHoldToken()
+    chainedA1 := parent.AllocChainedToken()
+    chainedA2 := parent.AllocChainedToken()
+    chainedB := chainedA2.AllocChainedToken()
+
+    parent.DoOnShutdown(func(_ context.Context) {
+        addToOrder(1)
+        time.Sleep(100 * time.Millisecond)
+    })
+
+    chainedA1.DoOnShutdown(func(_ context.Context) {
+        time.Sleep(100 * time.Millisecond)
+        addToOrder(2)
+    })
+
+    chainedA2.DoOnShutdown(func(_ context.Context) {
+        time.Sleep(50 * time.Millisecond)
+        addToOrder(3)
+    })
+
+    chainedB.DoOnShutdown(func(_ context.Context) {
+        time.Sleep(100 * time.Millisecond)
+        addToOrder(4)
+    })
+
+    go func() {
+        // Start shutdown process after a short delay
+        time.Sleep(100 * time.Millisecond)
+        keeper.StartShutdown()
+    }()
+
+    start := time.Now()
+    keeper.Wait()
+    elapsed := time.Since(start).Seconds()
+
+    expectedOrder := []int{1, 3, 2, 4}
+    if len(executionOrder) != len(expectedOrder) {
+        t.Fatalf("Expected execution order length %d, got %d. Order: %v", len(expectedOrder), len(executionOrder), executionOrder)
+    }
+
+    for i, expected := range expectedOrder {
+        if executionOrder[i] != expected {
+            t.Fatalf("Expected execution order %v, got %v", expectedOrder, executionOrder)
+        }
+    }
+
+    // Total time should be at least 350ms (100ms shutdown delay + 100ms parent + 100ms chainedA1+chainedA2(concurrently) + 100ms chainedB(start from release of chainedA2))
+    if elapsed < 0.35 || elapsed >= 0.36 {
+        t.Fatalf("Expected total execution time to be at least 350ms and less than 360ms, got: %f seconds", elapsed)
     }
 }
