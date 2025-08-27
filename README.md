@@ -200,6 +200,52 @@ keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
 })
 ```
 
+### Chained HoldToken
+The chained HoldToken feature allows you to create hierarchical HoldToken structures with dependencies. Child tokens will wait for parent tokens to be released before executing their shutdown logic. This mechanism ensures the orderly shutdown of multiple dependent modules in complex scenarios.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+    "os"
+    "syscall"
+
+    "github.com/hsldymq/shutdownKeeper/v2"
+)
+
+func main() {
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
+        Signals: []os.Signal{syscall.SIGINT, syscall.SIGTERM},
+    })
+
+    // Create tokens for two modules, where module A should be released before module B
+    moduleAToken := keeper.AllocHoldToken()
+    moduleBToken := moduleAToken.AllocChainedToken()
+
+    // Module A shutdown logic
+    moduleAToken.DoOnShutdown(func(ctx context.Context) {
+        fmt.Printf("Module A starting shutdown...")
+        // Simulate some cleanup work
+        time.Sleep(2 * time.Second)
+        fmt.Println("Module A shutdown completed")
+    })
+
+    // Module B shutdown logic (will wait for module A to shutdown first)
+    moduleBToken.DoOnShutdown(func(ctx context.Context) {
+        fmt.Printf("Module B starting shutdown...")
+        time.Sleep(1 * time.Second)
+        fmt.Println("Module B shutdown completed")
+    })
+
+    fmt.Println("Application started, press Ctrl+C to test ordered shutdown")
+    keeper.Wait()
+    fmt.Println("Application gracefully shut down in order")
+}
+```
+
 ## Frequently Asked Questions
 
 ### Q: Why not use context.WithCancel directly?
@@ -210,6 +256,6 @@ A: Context can only pass cancellation signals but cannot ensure that all gorouti
 
 A: Set the `MaxHoldTime` parameter, and it will force exit after timeout. You can also set your own timeout logic within each module.
 
-### Q: Can Tokens be dynamically allocated at runtime?
+### Q: Can HoldTokens be dynamically allocated at runtime?
 
 A: Yes! You can call `AllocHoldToken()` at any time, and Keeper will track all allocated tokens.

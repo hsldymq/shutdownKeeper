@@ -6,9 +6,9 @@
 
 ---
 
-这个库用于帮助你实现程序的优雅退出。它提供一个协调管理器，使程序和各个子模块之间在关闭过程中能够双向同步状态。
+这个库用于帮助你实现程序的优雅退出. 它提供一个协调管理器, 使程序和各个子模块之间在关闭过程中能够双向同步状态. 
 
-各个模块可以感知到程序的关闭信号，从而进行收尾工作。模块也能够通知协调管理器自己已经完成了收尾工作。这样既能最大限度避免数据丢失和不一致，也不必过度等待太长时间。
+各个模块可以感知到程序的关闭信号, 从而进行收尾工作. 模块也能够通知协调管理器自己已经完成了收尾工作. 这样既能最大限度避免数据丢失和不一致, 也不必过度等待太长时间. 
 
 ### 安装
 
@@ -200,6 +200,52 @@ keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
 })
 ```
 
+### 链式 HoldToken
+链式HoldToken功能允许你创建具有依赖关系的 HoldToken 层级结构.子Token 会等待父Token 释放后才开始执行其关闭逻辑. 这种机制用于在一些复杂场景下确保多个有依赖关系模块的关闭操作的顺序性. 
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+    "os"
+    "syscall"
+
+    "github.com/hsldymq/shutdownKeeper/v2"
+)
+
+func main() {
+    keeper := shutdownKeeper.NewKeeper(shutdownKeeper.KeeperOpts{
+        Signals: []os.Signal{syscall.SIGINT, syscall.SIGTERM},
+    })
+
+    // 分别创建两个模块的 Token, 其中模块A的释放应该先于模块B
+    moduleAToken := keeper.AllocHoldToken()
+    moduleBToken := moduleAToken.AllocChainedToken()
+
+    // 模块A的关闭逻辑
+    moduleAToken.DoOnShutdown(func(ctx context.Context) {
+        fmt.Printf("模块A开始关闭...")
+        // 模拟一些清理工作
+        time.Sleep(2 * time.Second)
+        fmt.Println("模块A关闭完成")
+    })
+
+    // 模块B的关闭逻辑（会等待模块A关闭后才执行）
+    moduleBToken.DoOnShutdown(func(ctx context.Context) {
+        fmt.Printf("模块B开始关闭...")
+        time.Sleep(1 * time.Second)
+        fmt.Println("模块B关闭完成")
+    })
+
+    fmt.Println("应用程序启动, 按 Ctrl+C 测试有序关闭")
+    keeper.Wait()
+    fmt.Println("应用程序已按顺序优雅退出")
+}
+```
+
 ## 常见问题
 
 ### Q: 为什么不直接使用 context.WithCancel?
@@ -210,6 +256,6 @@ A: Context 只能传递取消信号,但不能确保所有 goroutine 都完成了
 
 A: 设置 `MaxHoldTime` 参数,超时后会强制退出.你也可以在每个模块内部设置自己的超时逻辑.
 
-### Q: 可以在运行时动态分配 Token 吗?
+### Q: 可以在运行时动态分配 HoldToken 吗?
 
 A: 可以！你可以随时调用 `AllocHoldToken()`,Keeper 会跟踪所有分配的 token.
