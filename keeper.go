@@ -20,14 +20,14 @@ const (
 // Each subroutine that holding a HoldToken should call the Release() method after it finishes its work.
 // Once all HoldTokens are released, the shutdown keeper will return from its Wait() method call.
 type HoldToken interface {
-    // ListenShutdown will block the current goroutine until the shutdown event is triggered.
+    // ListenShutdown will block the current goroutine until the shutdown event is triggered or parent token is released (for chained tokens).
     ListenShutdown()
 
-    // Context is the context that will be canceled when the shutdown event is triggered, for example, when a signal is received or when the StartShutdown method is called.
+    // Context is the context that will be canceled when the shutdown event is triggered or parent token is released.
     // this context is the one that ListenShutdown method blocks on.
     Context() context.Context
 
-    // Release should always be called after the subroutine finishes its work.
+    // Release should always be called after the subroutine holding this token finishes its work.
     Release()
 
     // DeadlineContext is the context that will be canceled when the MaxHoldTime is exceeded during the shutdown process.
@@ -42,6 +42,10 @@ type HoldToken interface {
 
     // GoRunWithCtx is similar to GoRun, but it passes the context returned by Context method to the function.
     GoRunWithCtx(f func(ctx context.Context))
+
+    // AllocChainedToken creates a chained HoldToken, this new token's ListenShutdown method will block until the current token is released.
+    // This allows to create a hierarchy of HoldTokens, where the chained token waits for the parent token to finish.
+    AllocChainedToken() HoldToken
 }
 
 type TokenReleaseMode int
@@ -174,18 +178,9 @@ func (k *ShutdownKeeper) Wait() {
 
 // AllocHoldToken allocates a HoldToken.
 func (k *ShutdownKeeper) AllocHoldToken() HoldToken {
-    atomic.AddInt32(&k.holdTokenNum, 1)
-    return newHoldTokenImpl(k.Context(), k.DeadlineContext(), sync.OnceFunc(func() {
-        if atomic.AddInt32(&k.holdTokenNum, -1) == 0 {
-            s := atomic.LoadInt32(&k.status)
-            if s == statusWaiting || s == statusShutting {
-                k.holdTokensFinishFunc()
-                if k.tokenReleaseMode == ShutdownWhenNoTokens {
-                    k.StartShutdown()
-                }
-            }
-        }
-    }))
+    return k.doAllocToken(func(releaseCallback func()) HoldToken {
+        return newHoldTokenImpl(k, k.Context(), k.DeadlineContext(), releaseCallback)
+    })
 }
 
 // StartShutdown initiates the shutdown process.
@@ -203,6 +198,23 @@ func (k *ShutdownKeeper) Context() context.Context {
 // DeadlineContext returns the context that will be canceled when the MaxHoldTime is exceeded or all HoldTokens are released during the shutdown process.
 func (k *ShutdownKeeper) DeadlineContext() context.Context {
     return k.deadlineCtx
+}
+
+func (k *ShutdownKeeper) doAllocToken(allocFunc func(releaseCallback func()) HoldToken) HoldToken {
+    atomic.AddInt32(&k.holdTokenNum, 1)
+    return allocFunc(sync.OnceFunc(k.doReleaseToken))
+}
+
+func (k *ShutdownKeeper) doReleaseToken() {
+    if atomic.AddInt32(&k.holdTokenNum, -1) == 0 {
+        s := atomic.LoadInt32(&k.status)
+        if s == statusWaiting || s == statusShutting {
+            k.holdTokensFinishFunc()
+            if k.tokenReleaseMode == ShutdownWhenNoTokens {
+                k.StartShutdown()
+            }
+        }
+    }
 }
 
 func (k *ShutdownKeeper) listenSignals() {
@@ -234,19 +246,30 @@ func (k *ShutdownKeeper) getHoldingTokenNum() int32 {
 }
 
 type holdTokenImpl struct {
-    listeningCtx  context.Context
-    deadlineCtx   context.Context
-    releasingFunc func()
+    keeper *ShutdownKeeper
+
+    listeningCtx    context.Context
+    deadlineCtx     context.Context
+    releaseCallback func()
+
+    chainingCtx        context.Context
+    chainingCancelFunc context.CancelFunc
 
     shuttingFuncCount int32
     runningFuncCount  int32
 }
 
-func newHoldTokenImpl(listeningCtx context.Context, deadlineCtx context.Context, releasingFunc func()) *holdTokenImpl {
+func newHoldTokenImpl(keeper *ShutdownKeeper, listeningCtx context.Context, deadlineCtx context.Context, releaseCallback func()) *holdTokenImpl {
+    chainingCtx, chainingCancelFunc := context.WithCancel(context.Background())
     return &holdTokenImpl{
-        listeningCtx:  listeningCtx,
-        deadlineCtx:   deadlineCtx,
-        releasingFunc: releasingFunc,
+        keeper: keeper,
+
+        listeningCtx:    listeningCtx,
+        deadlineCtx:     deadlineCtx,
+        releaseCallback: releaseCallback,
+
+        chainingCtx:        chainingCtx,
+        chainingCancelFunc: chainingCancelFunc,
 
         shuttingFuncCount: 0,
         runningFuncCount:  0,
@@ -262,7 +285,8 @@ func (kt *holdTokenImpl) Context() context.Context {
 }
 
 func (kt *holdTokenImpl) Release() {
-    kt.releasingFunc()
+    kt.releaseCallback()
+    kt.chainingCancelFunc()
 }
 
 func (kt *holdTokenImpl) DeadlineContext() context.Context {
@@ -304,4 +328,10 @@ func (kt *holdTokenImpl) GoRunWithCtx(f func(ctx context.Context)) {
         }()
         f(kt.listeningCtx)
     }()
+}
+
+func (kt *holdTokenImpl) AllocChainedToken() HoldToken {
+    return kt.keeper.doAllocToken(func(releaseCallback func()) HoldToken {
+        return newHoldTokenImpl(kt.keeper, kt.chainingCtx, kt.DeadlineContext(), releaseCallback)
+    })
 }
