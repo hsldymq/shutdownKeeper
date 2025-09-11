@@ -200,6 +200,11 @@ func (k *ShutdownKeeper) DeadlineContext() context.Context {
     return k.deadlineCtx
 }
 
+// DoOnShutdown is just a shortcut for HoldToken's DoOnShutdown method.
+func (k *ShutdownKeeper) DoOnShutdown(f func(ctx context.Context)) {
+    k.AllocHoldToken().DoOnShutdown(f)
+}
+
 func (k *ShutdownKeeper) doAllocToken(allocFunc func(releaseCallback func()) HoldToken) HoldToken {
     atomic.AddInt32(&k.holdTokenNum, 1)
     return allocFunc(sync.OnceFunc(k.doReleaseToken))

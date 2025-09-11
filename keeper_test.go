@@ -65,12 +65,12 @@ func TestShutdownKeeper_HoldTokens(t *testing.T) {
 
     start := time.Now()
     var actual int32
-    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
+    keeper.DoOnShutdown(func(_ context.Context) {
         time.Sleep(time.Second)
         atomic.AddInt32(&actual, 1)
     })
 
-    keeper.AllocHoldToken().DoOnShutdown(func(_ context.Context) {
+    keeper.DoOnShutdown(func(_ context.Context) {
         time.Sleep(500 * time.Millisecond)
         atomic.AddInt32(&actual, 1)
     })
